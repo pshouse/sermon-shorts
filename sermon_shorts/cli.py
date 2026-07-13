@@ -61,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
                              "instead of asking Claude again (e.g. after fixing a transcript typo)")
     parser.add_argument("--only", type=int, default=None, metavar="N",
                         help="with --from-manifest: re-render only clip number N")
+    parser.add_argument("--speaker", default=None, metavar="NAME",
+                        help='who is preaching this service, e.g. "Pastor Mike Jones" — '
+                             "mentioned in descriptions; overrides church.json for this run")
     parser.add_argument("--sermon-only", action="store_true",
                         help="instead of making clips, trim the service down to just the "
                              "sermon and save it as <video>_sermon.mp4")
@@ -116,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         church = _load_church()
+        if args.speaker:
+            church = {**(church or {}), "speaker": args.speaker}
         if church:
             print(f"[2/4] Selecting the {args.clips} best moments with Claude "
                   f"(church profile: {church.get('church_name', 'unnamed')})")

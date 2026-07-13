@@ -113,6 +113,13 @@ you want on every post). All fields are optional; without a `church.json` the
 descriptions stay generic. Like `.env`, this file stays on your machine and is
 never committed.
 
+If your speaker rotates, leave `speaker` out of the config and pass it per
+service instead:
+
+```
+python -m sermon_shorts sunday.mp4 --speaker "Pastor Mike Jones"
+```
+
 ## Notes
 
 - **First run downloads the Whisper model** (~500 MB for `small`) — after that it
