@@ -3,6 +3,11 @@
 Turn a full church service recording into vertical, captioned social clips —
 like CapCut's "long video to shorts," but built for church services.
 
+![The widescreen service recording next to the vertical captioned clip produced from it](docs/before-after.png)
+
+*Left: the full service recording. Right: the same moment in the finished
+clip — auto-cropped to the speaker, captions burned in.*
+
 Give it the Sunday service MP4 and it will:
 
 1. **Transcribe** the whole service locally with Whisper (word-level timestamps)
@@ -60,7 +65,20 @@ python -m sermon_shorts "C:\videos\sunday-service.mp4" --clips 3
 ```
 
 Output lands in `sunday-service_clips/` next to the video, along with a
-`clips.json` manifest (titles, timestamps, and why each moment was chosen).
+`clips.json` manifest (titles, timestamps, and why each moment was chosen) and
+a `.txt` file per clip with a ready-to-paste title + description for uploading.
+
+### Trim a service down to just the sermon
+
+```
+python -m sermon_shorts "C:\videos\sunday-service.mp4" --sermon-only
+```
+
+Finds where the message starts and ends (skipping worship, announcements,
+offering, and the closing) and saves `sunday-service_sermon.mp4` next to the
+video — full resolution, no quality loss, done in seconds. The default cut
+lands on the nearest keyframe (within a few seconds, absorbed by padding);
+add `--reencode` if you need it frame-accurate.
 
 Options:
 
@@ -71,6 +89,29 @@ Options:
 | `--whisper-model` | `small` | `tiny`/`base`/`small`/`medium`/`large-v3` — bigger is more accurate, slower |
 | `--language` | auto | e.g. `en`, `es` |
 | `--no-captions` | off | skip burned-in captions |
+| `--sermon-only` | off | trim the service to just the sermon instead of making clips |
+| `--reencode` | off | with `--sermon-only`: frame-accurate cut (slower) |
+| `--from-manifest` | off | re-render the exact clips in `clips.json` (no new Claude call) |
+| `--only N` | all | with `--from-manifest`: re-render only clip N |
+
+### Optional: church profile
+
+Copy `church.example.json` to `church.json` in the project folder and fill in
+your details:
+
+```json
+{
+  "church_name": "Example Community Church",
+  "speaker": "Pastor John Smith",
+  "footer": "Join us Sundays at 10:00 AM - https://examplechurch.org"
+}
+```
+
+Clip descriptions will then mention your church and speaker naturally, and
+every description ends with your footer line (service times, website — whatever
+you want on every post). All fields are optional; without a `church.json` the
+descriptions stay generic. Like `.env`, this file stays on your machine and is
+never committed.
 
 ## Notes
 

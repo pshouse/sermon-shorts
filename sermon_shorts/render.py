@@ -48,6 +48,35 @@ def render_clip(
         str(out_path.resolve()),
     ]
 
+    _run(cmd, out_path, workdir)
+
+
+def trim_video(video_path: Path, start: float, end: float, out_path: Path,
+               reencode: bool = False) -> None:
+    """Cut [start, end] out of the source at original resolution.
+
+    Default is a stream copy: no quality loss and near-instant, but the cut
+    lands on the nearest keyframe (usually within a few seconds — absorbed by
+    padding). Pass reencode=True for frame-accurate cuts at the cost of a
+    full re-encode.
+    """
+    cmd = [
+        ffmpeg_exe(),
+        "-y",
+        "-ss", f"{start:.3f}",
+        "-i", str(video_path.resolve()),
+        "-t", f"{end - start:.3f}",
+    ]
+    if reencode:
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k"]
+    else:
+        cmd += ["-c", "copy"]
+    cmd += ["-movflags", "+faststart", str(out_path.resolve())]
+    _run(cmd, out_path, str(out_path.parent))
+
+
+def _run(cmd: list[str], out_path: Path, workdir: str) -> None:
     result = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True,
                             encoding="utf-8", errors="replace")
     if result.returncode != 0:

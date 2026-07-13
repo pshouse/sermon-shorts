@@ -13,10 +13,22 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .transcribe import transcribe, transcript_as_text, snap_to_sentences, words_in_range
-from .highlights import select_highlights, Clip, ClipSelection
+from .highlights import select_highlights, find_sermon, Clip, ClipSelection
 from .reframe import track_speaker, build_pan_keyframes, crop_filter, video_dimensions
 from .captions import write_ass
-from .render import render_clip
+from .render import render_clip, trim_video
+
+
+def _load_church() -> dict | None:
+    """Load an optional church profile: church.json in cwd or the project folder."""
+    for candidate in (Path.cwd() / "church.json",
+                      Path(__file__).resolve().parent.parent / "church.json"):
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                sys.exit(f"Invalid JSON in {candidate}: {e}")
+    return None
 
 
 def _slug(text: str, max_len: int = 40) -> str:
@@ -49,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
                              "instead of asking Claude again (e.g. after fixing a transcript typo)")
     parser.add_argument("--only", type=int, default=None, metavar="N",
                         help="with --from-manifest: re-render only clip number N")
+    parser.add_argument("--sermon-only", action="store_true",
+                        help="instead of making clips, trim the service down to just the "
+                             "sermon and save it as <video>_sermon.mp4")
+    parser.add_argument("--reencode", action="store_true",
+                        help="with --sermon-only: frame-accurate cut (slower); default is a "
+                             "lossless instant stream copy that cuts on the nearest keyframe")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -57,12 +75,31 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"video not found: {video}")
 
     out_dir: Path = args.out or video.parent / f"{video.stem}_clips"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not args.sermon_only:
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[1/4] Transcribing {video.name}")
+    steps = 3 if args.sermon_only else 4
+    print(f"[1/{steps}] Transcribing {video.name}")
     transcript = transcribe(video, model_size=args.whisper_model, language=args.language)
     if not transcript["segments"]:
         sys.exit("No speech found in the video.")
+
+    if args.sermon_only:
+        print("[2/3] Finding the sermon with Claude")
+        window = find_sermon(transcript_as_text(transcript))
+        start, end = snap_to_sentences(transcript, window.start, window.end)
+        start = max(0.0, start - 3.0)  # padding also absorbs the keyframe snap
+        end = end + 3.0
+        minutes = (end - start) / 60
+        print(f"  \"{window.title}\" — {start:.0f}s to {end:.0f}s ({minutes:.0f} min)")
+        print(f"  ({window.reason})")
+
+        sermon_path = video.parent / f"{video.stem}_sermon.mp4"
+        mode = "re-encoding (frame-accurate)" if args.reencode else "stream copy (instant, lossless)"
+        print(f"[3/3] Trimming — {mode}")
+        trim_video(video, start, end, sermon_path, reencode=args.reencode)
+        print(f"Done: {sermon_path}")
+        return 0
 
     manifest_file = out_dir / "clips.json"
     if args.from_manifest:
@@ -78,8 +115,13 @@ def main(argv: list[str] | None = None) -> int:
                    for c in saved["clips"]],
         )
     else:
-        print(f"[2/4] Selecting the {args.clips} best moments with Claude")
-        selection = select_highlights(transcript_as_text(transcript), args.clips)
+        church = _load_church()
+        if church:
+            print(f"[2/4] Selecting the {args.clips} best moments with Claude "
+                  f"(church profile: {church.get('church_name', 'unnamed')})")
+        else:
+            print(f"[2/4] Selecting the {args.clips} best moments with Claude")
+        selection = select_highlights(transcript_as_text(transcript), args.clips, church=church)
         if not selection.clips:
             sys.exit("Claude did not find any suitable clips. Try a larger --clips value or check the transcript cache.")
         print(f"  service summary: {selection.service_summary}")
