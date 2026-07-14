@@ -17,6 +17,7 @@ from .highlights import select_highlights, find_sermon, Clip, ClipSelection
 from .reframe import track_speaker, build_pan_keyframes, crop_filter, video_dimensions
 from .captions import write_ass
 from .render import render_clip, trim_video
+from .thumbnail import pick_thumbnail_frame, render_thumbnail
 
 
 def _load_church() -> dict | None:
@@ -56,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--language", default=None,
                         help="spoken language code, e.g. en, es (default: auto-detect)")
     parser.add_argument("--no-captions", action="store_true", help="skip burned-in captions")
+    parser.add_argument("--no-thumbnails", action="store_true",
+                        help="skip the designed cover image (<clip>.jpg) generated per clip")
     parser.add_argument("--from-manifest", action="store_true",
                         help="re-render the exact clips in the output folder's clips.json "
                              "instead of asking Claude again (e.g. after fixing a transcript typo)")
@@ -170,7 +173,16 @@ def main(argv: list[str] | None = None) -> int:
             print("  rendering...")
             render_clip(video, start, end, vf, ass_path, out_path)
 
+            if not args.no_thumbnails:
+                print("  designing cover thumbnail...")
+                t_thumb, thumb_center = pick_thumbnail_frame(video, start, end)
+                thumb_path = out_path.with_suffix(".jpg")
+                render_thumbnail(video, t_thumb, thumb_center, src_w, src_h,
+                                 clip.title, thumb_path, Path(tmp))
+
         print(f"  -> {out_path}")
+        if not args.no_thumbnails:
+            print(f"  -> {thumb_path.name} (cover image to upload as the thumbnail)")
 
         if clip.description:
             sidecar = out_path.with_suffix(".txt")

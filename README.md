@@ -17,7 +17,11 @@ Give it the Sunday service MP4 and it will:
    announcements, and offering segments.
 3. **Reframe to 9:16** — finds the speaker's face and crops the vertical frame around them
 4. **Burn in pop-style captions** from the transcript
-5. **Render** 1080x1920 MP4s ready for Reels / Shorts / TikTok
+5. **Render** 1080x1920 MP4s ready for Reels / Shorts / TikTok, with speech
+   loudness-normalized to the −14 LUFS social standard
+6. **Design a cover thumbnail** (`<clip>.jpg`) for each clip — a clean,
+   caption-free frame centered on the speaker with the headline in bold —
+   so the platform doesn't auto-pick an awkward mid-clip frame
 
 Everything runs locally except the highlight-picking step, which sends the
 *text transcript only* (never the video) to the Claude API.
@@ -66,7 +70,8 @@ python -m sermon_shorts "C:\videos\sunday-service.mp4" --clips 3
 
 Output lands in `sunday-service_clips/` next to the video, along with a
 `clips.json` manifest (titles, timestamps, and why each moment was chosen) and
-a `.txt` file per clip with a ready-to-paste title + description for uploading.
+a `.txt` file per clip with a ready-to-paste title + description, and a
+`.jpg` cover thumbnail per clip to upload as the video's thumbnail.
 
 ### Trim a service down to just the sermon
 
@@ -89,6 +94,7 @@ Options:
 | `--whisper-model` | `small` | `tiny`/`base`/`small`/`medium`/`large-v3` — bigger is more accurate, slower |
 | `--language` | auto | e.g. `en`, `es` |
 | `--no-captions` | off | skip burned-in captions |
+| `--no-thumbnails` | off | skip the designed `.jpg` cover image per clip |
 | `--sermon-only` | off | trim the service to just the sermon instead of making clips |
 | `--reencode` | off | with `--sermon-only`: frame-accurate cut (slower) |
 | `--from-manifest` | off | re-render the exact clips in `clips.json` (no new Claude call) |

@@ -18,6 +18,20 @@ def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+# Audio cleanup for spoken word: cut sub-80Hz room rumble, then normalize to
+# the -14 LUFS loudness social platforms target (church recordings are often
+# 20+ dB too quiet). loudnorm is single-pass — fine for speech, no pumping.
+AUDIO_FILTER = "highpass=f=80,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
+
+# Video cleanup, applied around the upscale. Source recordings are usually
+# low-bitrate 720p that gets cropped and scaled 2-3x, so we lightly denoise
+# the compression mush *before* upscaling, then add a gentle sharpen after so
+# edges don't go soft. This can't add detail that was never recorded — the
+# real ceiling is the source bitrate/resolution — but it cleans up the look.
+VIDEO_DENOISE = "hqdn3d=2:1.5:6:6"
+VIDEO_SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
+
+
 def render_clip(
     video_path: Path,
     start: float,
@@ -26,7 +40,9 @@ def render_clip(
     ass_path: Path | None,
     out_path: Path,
 ) -> None:
-    vf = vf_crop_scale
+    # denoise (full frame) -> crop+scale -> sharpen -> burn captions last, so
+    # the captions are rendered crisp at 1080x1920 and never sharpened/denoised.
+    vf = f"{VIDEO_DENOISE},{vf_crop_scale},{VIDEO_SHARPEN}"
     workdir = str(ass_path.parent) if ass_path else str(out_path.parent)
     if ass_path:
         vf += f",subtitles={ass_path.name}"
@@ -38,9 +54,10 @@ def render_clip(
         "-to", f"{end:.3f}",
         "-i", str(video_path.resolve()),
         "-vf", vf,
+        "-af", AUDIO_FILTER,
         "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "20",
+        "-preset", "slow",
+        "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "160k",
