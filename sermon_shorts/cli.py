@@ -12,7 +12,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import __version__
-from .transcribe import transcribe, transcript_as_text, snap_to_sentences, words_in_range
+from .transcribe import (transcribe, transcript_as_text, snap_to_sentences,
+                         words_in_range, save_shifted_transcript)
 from .highlights import select_highlights, find_sermon, Clip, ClipSelection
 from .reframe import track_speaker, build_pan_keyframes, crop_filter, video_dimensions
 from .captions import write_ass
@@ -104,6 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         mode = "re-encoding (frame-accurate)" if args.reencode else "stream copy (instant, lossless)"
         print(f"[3/3] Trimming — {mode}")
         trim_video(video, start, end, sermon_path, reencode=args.reencode)
+
+        cache = save_shifted_transcript(transcript, sermon_path, args.whisper_model, start, end)
+        print(f"  transcript re-based to {cache.name} "
+              f"(a later --clips run on the sermon skips transcribing)")
+        if not args.reencode:
+            print("  note: default stream copy cuts on the nearest keyframe, so "
+                  "caption timing may drift a second or two; use --reencode for exact sync")
         print(f"Done: {sermon_path}")
         return 0
 

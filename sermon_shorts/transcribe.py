@@ -58,6 +58,43 @@ def transcribe(video_path: Path, model_size: str = "small", language: str | None
     return result
 
 
+def shift_transcript(transcript: dict, start: float, end: float) -> dict:
+    """Re-base a transcript for a video that was trimmed to [start, end].
+
+    Keeps only the segments/words inside the cut and subtracts `start` from
+    every timestamp so t=0 in the result lines up with the first frame of the
+    trimmed file. Times are clamped to >= 0 for the (padded) leading segment.
+    """
+    segments = []
+    for seg in transcript["segments"]:
+        if seg["end"] < start or seg["start"] > end:
+            continue
+        words = [
+            {"start": max(0.0, round(w["start"] - start, 3)),
+             "end": max(0.0, round(w["end"] - start, 3)),
+             "word": w["word"]}
+            for w in seg["words"]
+            if w["end"] >= start and w["start"] <= end
+        ]
+        segments.append({
+            "start": max(0.0, round(seg["start"] - start, 3)),
+            "end": max(0.0, round(seg["end"] - start, 3)),
+            "text": seg["text"],
+            "words": words,
+        })
+    return {"language": transcript["language"], "segments": segments}
+
+
+def save_shifted_transcript(transcript: dict, sermon_path: Path, model_size: str,
+                            start: float, end: float) -> Path:
+    """Write a re-based transcript next to the trimmed sermon so a later
+    `--clips` run on that file reuses it instead of transcribing again."""
+    shifted = shift_transcript(transcript, start, end)
+    cache = _cache_path(sermon_path, model_size)
+    cache.write_text(json.dumps(shifted, ensure_ascii=False), encoding="utf-8")
+    return cache
+
+
 def transcript_as_text(transcript: dict) -> str:
     """Compact timestamped text for the highlight-selection prompt."""
     lines = []
