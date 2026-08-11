@@ -21,12 +21,18 @@ SUSTAIN = 1.2         # seconds a new position must persist before we pan
 PAN_TIME = 0.9        # seconds a pan takes
 
 
-def track_speaker(video_path: Path, start: float, end: float) -> tuple[list[float], list[float]]:
-    """Sample the speaker's horizontal position through [start, end].
+def track_speaker(
+    video_path: Path, start: float, end: float
+) -> tuple[list[float], list[float], tuple[float, float] | None]:
+    """Sample the speaker's face position through [start, end].
 
-    Returns (times relative to clip start, center-x fractions 0..1).
-    Gaps where no face was found are interpolated; if no face is ever
-    found the track is a constant 0.5 (center crop).
+    Returns (times relative to clip start, center-x fractions 0..1, face_band).
+    `face_band` is the speaker's typical vertical extent as (top, bottom)
+    fractions of frame height (0=top edge, 1=bottom edge), or None if no face
+    was ever found. Because the crop keeps full source height, that fraction
+    carries straight through to the output frame, so it tells caption placement
+    which half the face occupies. Horizontal gaps are interpolated; if no face
+    is ever found the track is a constant 0.5 (center crop).
     """
     cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -34,6 +40,8 @@ def track_speaker(video_path: Path, start: float, end: float) -> tuple[list[floa
     cap = cv2.VideoCapture(str(video_path))
     times: list[float] = []
     raw: list[float | None] = []
+    tops: list[float] = []
+    bottoms: list[float] = []
     try:
         if cap.isOpened():
             t = start
@@ -51,7 +59,10 @@ def track_speaker(video_path: Path, start: float, end: float) -> tuple[list[floa
                                                      minNeighbors=5, minSize=(24, 24))
                     if len(faces) > 0:
                         x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+                        sh = small.shape[0]
                         center = (x + fw / 2.0) / small.shape[1]
+                        tops.append(y / sh)
+                        bottoms.append((y + fh) / sh)
                 times.append(t - start)
                 raw.append(center)
                 t += SAMPLE_STEP
@@ -59,7 +70,7 @@ def track_speaker(video_path: Path, start: float, end: float) -> tuple[list[floa
         cap.release()
 
     if not times or all(c is None for c in raw):
-        return [0.0], [0.5]
+        return [0.0], [0.5], None
 
     # Fill detection gaps by interpolating between known positions
     xs = np.array([c if c is not None else np.nan for c in raw], dtype=float)
@@ -71,7 +82,12 @@ def track_speaker(video_path: Path, start: float, end: float) -> tuple[list[floa
     if len(xs) >= 5:
         xs = np.array([np.median(xs[max(0, i - 2):i + 3]) for i in range(len(xs))])
 
-    return times, xs.tolist()
+    # Median top/bottom is robust to the occasional crowd-face outlier and gives
+    # a single stable band per clip (captions that jitter frame-to-frame would
+    # be far more distracting than a fixed choice).
+    face_band = (float(np.median(tops)), float(np.median(bottoms))) if tops else None
+
+    return times, xs.tolist(), face_band
 
 
 def build_pan_keyframes(times: list[float], centers: list[float],

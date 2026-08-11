@@ -16,7 +16,7 @@ from .transcribe import (transcribe, transcript_as_text, snap_to_sentences,
                          words_in_range, save_shifted_transcript)
 from .highlights import select_highlights, find_sermon, Clip, ClipSelection
 from .reframe import track_speaker, build_pan_keyframes, crop_filter, video_dimensions
-from .captions import write_ass
+from .captions import write_ass, CAPTION_POSITION_CHOICES, resolve_caption_position
 from .render import render_clip, trim_video
 from .thumbnail import pick_thumbnail_frame, render_thumbnail
 
@@ -58,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--language", default=None,
                         help="spoken language code, e.g. en, es (default: auto-detect)")
     parser.add_argument("--no-captions", action="store_true", help="skip burned-in captions")
+    parser.add_argument("--caption-position", default="auto",
+                        choices=CAPTION_POSITION_CHOICES,
+                        help="where captions sit in the frame. 'auto' (default) uses the "
+                             "tracked face: captions go bottom normally, but lift to the top "
+                             "when the speaker sits low in frame (e.g. a zoomed-in camera). "
+                             "Force a side with bottom/top/center")
     parser.add_argument("--no-thumbnails", action="store_true",
                         help="skip the designed cover image (<clip>.jpg) generated per clip")
     parser.add_argument("--from-manifest", action="store_true",
@@ -160,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
               f"({start:.0f}s-{end:.0f}s, {duration:.0f}s, score {clip.score})")
 
         print("  tracking speaker for vertical crop...")
-        times, centers = track_speaker(video, start, end)
+        times, centers, face_band = track_speaker(video, start, end)
         keyframes = build_pan_keyframes(times, centers, duration)
         pans = max(0, (len(keyframes) - 2) // 2)
         if pans:
@@ -175,8 +181,14 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_captions:
                 words = words_in_range(transcript, start, end)
                 if words:
+                    position = resolve_caption_position(args.caption_position, face_band)
+                    if args.caption_position == "auto":
+                        where = f"{face_band[0]:.0%}-{face_band[1]:.0%} of frame" \
+                            if face_band else "no face found"
+                        print(f"  captions: {position} (auto — face at {where})")
                     ass_path = Path(tmp) / "captions.ass"
-                    write_ass(words, clip_start=start, out_path=ass_path)
+                    write_ass(words, clip_start=start, out_path=ass_path,
+                              position=position)
 
             print("  rendering...")
             render_clip(video, start, end, vf, ass_path, out_path)
