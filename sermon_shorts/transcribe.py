@@ -115,14 +115,75 @@ def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
     return out
 
 
+# Snapping tunables. The end is rounded *forward* to the next real sentence
+# end (never backward) so a clip never stops mid-sentence; the small tail pad
+# keeps a slightly-early whisper word-end timestamp from clipping the last word
+# or the speaker's closing breath.
+_SENTENCE_END_CHARS = ".!?…"
+_END_PAD = 0.4          # seconds of breathing room added after the final word
+_MAX_END_DRIFT = 6.0    # don't extend past this to reach the next sentence end
+_SNAP_TOLERANCE = 0.5   # slack when deciding a boundary is "at" the requested bound
+
+
+def _sentence_boundaries(transcript: dict) -> tuple[list[float], list[float]]:
+    """Derive true sentence start/end times from word-level punctuation.
+
+    faster-whisper attaches terminal punctuation to the word token it belongs
+    to (e.g. "world."), so a sentence ends on any word ending in . ! ? … and
+    the next spoken word opens a new one. This is far more reliable than
+    segment boundaries, which split on any pause — often mid-sentence.
+    """
+    starts: list[float] = []
+    ends: list[float] = []
+    expecting_start = True
+    for seg in transcript["segments"]:
+        for w in seg.get("words", []):
+            text = w["word"].strip()
+            if not text:
+                continue
+            if expecting_start:
+                starts.append(w["start"])
+                expecting_start = False
+            if text[-1] in _SENTENCE_END_CHARS:
+                ends.append(w["end"])
+                expecting_start = True
+    return starts, ends
+
+
 def snap_to_sentences(transcript: dict, start: float, end: float) -> tuple[float, float]:
-    """Snap rough clip bounds to whisper segment boundaries so clips don't cut mid-sentence."""
+    """Snap rough clip bounds to sentence boundaries so clips don't cut mid-sentence.
+
+    Start snaps to the beginning of the sentence at or before the requested
+    start; end snaps *forward* to the first sentence end at or after the
+    requested end (so the closing thought is never truncated), plus a short
+    tail pad. Falls back to whisper segment boundaries when a transcript has no
+    word-level timestamps.
+    """
     seg_starts = [s["start"] for s in transcript["segments"]]
     seg_ends = [s["end"] for s in transcript["segments"]]
     if not seg_starts:
         return start, end
-    snapped_start = min(seg_starts, key=lambda t: abs(t - start))
-    snapped_end = min(seg_ends, key=lambda t: abs(t - end))
+
+    sent_starts, sent_ends = _sentence_boundaries(transcript)
+    starts_pool = sent_starts or seg_starts
+    ends_pool = sent_ends or seg_ends
+
+    # Start: latest sentence start that isn't past the requested start, so we
+    # open at a sentence beginning rather than mid-word.
+    at_or_before = [t for t in starts_pool if t <= start + _SNAP_TOLERANCE]
+    snapped_start = max(at_or_before) if at_or_before \
+        else min(starts_pool, key=lambda t: abs(t - start))
+
+    # End: earliest sentence end at or after the requested end (round up, never
+    # truncate). Only fall back to nearest if the next sentence end is
+    # unreasonably far off, to avoid tacking on a long unrelated tail.
+    at_or_after = [t for t in ends_pool if t >= end - _SNAP_TOLERANCE]
+    if at_or_after and min(at_or_after) - end <= _MAX_END_DRIFT:
+        snapped_end = min(at_or_after)
+    else:
+        snapped_end = min(ends_pool, key=lambda t: abs(t - end))
+    snapped_end += _END_PAD
+
     if snapped_end <= snapped_start:
         return start, end
     return snapped_start, snapped_end
