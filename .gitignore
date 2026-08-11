@@ -3,3 +3,4 @@ church.json
 .venv/
 __pycache__/
 *.transcript-*.json
+.DS_Store
