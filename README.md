@@ -94,6 +94,14 @@ When the Subsplash media item lists a speaker, it's used automatically, so
 clip descriptions name whoever actually preached that week — no `--speaker`
 needed.
 
+`--weekly` is idempotent: if the newest service's clips already exist it
+exits without doing anything (add `--force` to redo), so it's safe to run
+on a schedule. `scripts/weekly_cron.sh` is a ready-made scheduled entry
+point — it logs to `~/Library/Logs/sermon-shorts.log` and posts a macOS
+notification when new clips are ready — meant to be triggered by launchd
+(see the example LaunchAgent in the script's comments or point one at the
+script on Sunday afternoons).
+
 Output lands in `sunday-service_clips/` next to the video, along with a
 `clips.json` manifest (titles, timestamps, and why each moment was chosen) and
 a `.txt` file per clip with a ready-to-paste title + description, and a
@@ -128,7 +136,8 @@ Options:
 | `--only N` | all | with `--from-manifest`: re-render only clip N |
 | `--latest` | off | fetch the newest service from your Subsplash feed instead of giving a file |
 | `--download-dir DIR` | `~/Downloads` | where `--latest` saves the recording |
-| `--weekly` | off | `--latest` + sermon trim + clips, in one run |
+| `--weekly` | off | `--latest` + sermon trim + clips, in one run; no-op if already done |
+| `--force` | off | with `--weekly`: redo even if this service's clips exist |
 
 ### Optional: church profile
 

@@ -92,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weekly", action="store_true",
                         help="the whole Sunday routine in one command: fetch the latest "
                              "service (--latest), trim it to the sermon, then cut clips "
-                             "from the sermon")
+                             "from the sermon; does nothing if that service's clips "
+                             "already exist, so it's safe to run on a schedule")
+    parser.add_argument("--force", action="store_true",
+                        help="with --weekly: redo the service even if its clips already exist")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -131,6 +134,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"video not found: {video}")
 
     if args.weekly:
+        sermon = video.parent / f"{video.stem}_sermon.mp4"
+        done_manifest = (args.out or sermon.parent / f"{sermon.stem}_clips") / "clips.json"
+        if done_manifest.exists() and not args.force:
+            print(f"Already processed — {done_manifest} exists. Use --force to redo.")
+            return 0
         common = ["--whisper-model", args.whisper_model]
         if args.language:
             common += ["--language", args.language]
@@ -138,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
                    *(["--reencode"] if args.reencode else []), *common])
         if rc:
             return rc
-        sermon = video.parent / f"{video.stem}_sermon.mp4"
         print(f"\nNow cutting clips from {sermon.name}")
         clip_argv = [str(sermon), "--clips", str(args.clips),
                      "--caption-position", args.caption_position, *common]
