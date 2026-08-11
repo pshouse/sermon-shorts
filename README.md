@@ -68,6 +68,32 @@ precedence over the `.env` file.)
 python -m sermon_shorts "C:\videos\sunday-service.mp4" --clips 3
 ```
 
+### The whole Sunday in one command
+
+If your church is on Subsplash, you can skip the manual download entirely:
+
+```
+python -m sermon_shorts --weekly
+```
+
+This fetches the newest service recording straight from your church's public
+Subsplash media feed (no login or API key needed), trims it to just the
+sermon, and cuts clips from the sermon — the full weekly routine in one
+command. Add `"subsplash": "yourchurchname"` to `church.json` first — it's
+the `<name>` part of your `subsplash.com/u/<name>` media page URL.
+
+The download lands in `~/Downloads` (change with `--download-dir`), and a
+recording that's already there is not downloaded again — so re-running is
+cheap. `--latest` does just the fetch part, composable with any other mode:
+
+```
+python -m sermon_shorts --latest --sermon-only
+```
+
+When the Subsplash media item lists a speaker, it's used automatically, so
+clip descriptions name whoever actually preached that week — no `--speaker`
+needed.
+
 Output lands in `sunday-service_clips/` next to the video, along with a
 `clips.json` manifest (titles, timestamps, and why each moment was chosen) and
 a `.txt` file per clip with a ready-to-paste title + description, and a
@@ -94,11 +120,15 @@ Options:
 | `--whisper-model` | `small` | `tiny`/`base`/`small`/`medium`/`large-v3` — bigger is more accurate, slower |
 | `--language` | auto | e.g. `en`, `es` |
 | `--no-captions` | off | skip burned-in captions |
+| `--caption-position` | `auto` | where captions sit: `auto`, `bottom`, `top`, or `center`. `auto` reads the tracked face and keeps captions clear of it — bottom normally, but lifted to the top when the speaker sits low in the frame (e.g. a zoomed-in camera). Force a side to override |
 | `--no-thumbnails` | off | skip the designed `.jpg` cover image per clip |
 | `--sermon-only` | off | trim the service to just the sermon instead of making clips |
 | `--reencode` | off | with `--sermon-only`: frame-accurate cut (slower) |
 | `--from-manifest` | off | re-render the exact clips in `clips.json` (no new Claude call) |
 | `--only N` | all | with `--from-manifest`: re-render only clip N |
+| `--latest` | off | fetch the newest service from your Subsplash feed instead of giving a file |
+| `--download-dir DIR` | `~/Downloads` | where `--latest` saves the recording |
+| `--weekly` | off | `--latest` + sermon trim + clips, in one run |
 
 ### Optional: church profile
 

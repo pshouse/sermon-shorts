@@ -48,7 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="sermon-shorts",
         description="Turn a full church service recording into vertical, captioned social clips.",
     )
-    parser.add_argument("video", type=Path, help="path to the service recording (mp4/mov/mkv)")
+    parser.add_argument("video", type=Path, nargs="?", default=None,
+                        help="path to the service recording (mp4/mov/mkv); "
+                             "or use --latest to fetch it from Subsplash")
     parser.add_argument("--clips", type=int, default=3, help="number of clips to produce (default 3)")
     parser.add_argument("--out", type=Path, default=None,
                         help="output directory (default: <video name>_clips next to the video)")
@@ -80,12 +82,75 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reencode", action="store_true",
                         help="with --sermon-only: frame-accurate cut (slower); default is a "
                              "lossless instant stream copy that cuts on the nearest keyframe")
+    parser.add_argument("--latest", action="store_true",
+                        help="fetch the newest service recording from the church's public "
+                             'Subsplash feed instead of giving a file (needs "subsplash" '
+                             "in church.json); skips the download if the file is already here")
+    parser.add_argument("--download-dir", type=Path, default=Path.home() / "Downloads",
+                        metavar="DIR",
+                        help="where --latest saves the recording (default: ~/Downloads)")
+    parser.add_argument("--weekly", action="store_true",
+                        help="the whole Sunday routine in one command: fetch the latest "
+                             "service (--latest), trim it to the sermon, then cut clips "
+                             "from the sermon")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
-    video: Path = args.video
-    if not video.exists():
-        parser.error(f"video not found: {video}")
+    church = _load_church()
+    if args.speaker:
+        church = {**(church or {}), "speaker": args.speaker}
+
+    if args.weekly:
+        args.latest = True
+
+    if args.latest:
+        if args.video is not None:
+            parser.error("--latest fetches the video for you — drop the file argument")
+        subsplash_path = (church or {}).get("subsplash")
+        if not subsplash_path:
+            parser.error('--latest needs church.json to name your feed, e.g. '
+                         '"subsplash": "gastoncommunitychurch" '
+                         "(the <name> in subsplash.com/u/<name>)")
+        import httpx
+        from .subsplash import latest_recording, download, SubsplashError
+        try:
+            recording = latest_recording(subsplash_path)
+            print(f'Latest service on Subsplash: "{recording.title}" ({recording.date}'
+                  + (f", {recording.speaker}" if recording.speaker else "") + ")")
+            video = download(recording, args.download_dir)
+        except (SubsplashError, httpx.HTTPError) as e:
+            sys.exit(f"Subsplash fetch failed: {e}")
+        if recording.speaker and not args.speaker:
+            args.speaker = recording.speaker
+            church = {**(church or {}), "speaker": recording.speaker}
+    else:
+        if args.video is None:
+            parser.error("give a video file, or use --latest / --weekly")
+        video = args.video
+        if not video.exists():
+            parser.error(f"video not found: {video}")
+
+    if args.weekly:
+        common = ["--whisper-model", args.whisper_model]
+        if args.language:
+            common += ["--language", args.language]
+        rc = main([str(video), "--sermon-only",
+                   *(["--reencode"] if args.reencode else []), *common])
+        if rc:
+            return rc
+        sermon = video.parent / f"{video.stem}_sermon.mp4"
+        print(f"\nNow cutting clips from {sermon.name}")
+        clip_argv = [str(sermon), "--clips", str(args.clips),
+                     "--caption-position", args.caption_position, *common]
+        if args.speaker:
+            clip_argv += ["--speaker", args.speaker]
+        if args.no_captions:
+            clip_argv.append("--no-captions")
+        if args.no_thumbnails:
+            clip_argv.append("--no-thumbnails")
+        if args.out:
+            clip_argv += ["--out", str(args.out)]
+        return main(clip_argv)
 
     out_dir: Path = args.out or video.parent / f"{video.stem}_clips"
     if not args.sermon_only:
@@ -135,9 +200,6 @@ def main(argv: list[str] | None = None) -> int:
                    for c in saved["clips"]],
         )
     else:
-        church = _load_church()
-        if args.speaker:
-            church = {**(church or {}), "speaker": args.speaker}
         if church:
             print(f"[2/4] Selecting the {args.clips} best moments with Claude "
                   f"(church profile: {church.get('church_name', 'unnamed')})")

@@ -1,5 +1,6 @@
 {
   "church_name": "Example Community Church",
   "speaker": "Pastor John Smith",
-  "footer": "Join us Sundays at 10:00 AM - https://examplechurch.org"
+  "footer": "Join us Sundays at 10:00 AM - https://examplechurch.org",
+  "subsplash": "examplechurch"
 }
