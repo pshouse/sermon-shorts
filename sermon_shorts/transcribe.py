@@ -122,6 +122,7 @@ def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
 _SENTENCE_END_CHARS = ".!?…"
 _END_PAD = 0.4          # seconds of breathing room added after the final word
 _MAX_END_DRIFT = 6.0    # don't extend past this to reach the next sentence end
+_MAX_START_DRIFT = 15.0  # don't rewind past this to reach a sentence start
 _SNAP_TOLERANCE = 0.5   # slack when deciding a boundary is "at" the requested bound
 
 
@@ -156,8 +157,11 @@ def snap_to_sentences(transcript: dict, start: float, end: float) -> tuple[float
     Start snaps to the beginning of the sentence at or before the requested
     start; end snaps *forward* to the first sentence end at or after the
     requested end (so the closing thought is never truncated), plus a short
-    tail pad. Falls back to whisper segment boundaries when a transcript has no
-    word-level timestamps.
+    tail pad. Drift is bounded on both sides: some speakers get almost no
+    punctuation from whisper, and an unbounded snap toward a rare sentence
+    boundary can silently turn a 60-second clip into a 20-minute one. When no
+    sentence boundary is close enough, whisper's segment boundaries (which are
+    always dense) are tried, and failing that the requested time is kept.
     """
     seg_starts = [s["start"] for s in transcript["segments"]]
     seg_ends = [s["end"] for s in transcript["segments"]]
@@ -165,23 +169,34 @@ def snap_to_sentences(transcript: dict, start: float, end: float) -> tuple[float
         return start, end
 
     sent_starts, sent_ends = _sentence_boundaries(transcript)
-    starts_pool = sent_starts or seg_starts
-    ends_pool = sent_ends or seg_ends
 
-    # Start: latest sentence start that isn't past the requested start, so we
-    # open at a sentence beginning rather than mid-word.
-    at_or_before = [t for t in starts_pool if t <= start + _SNAP_TOLERANCE]
-    snapped_start = max(at_or_before) if at_or_before \
-        else min(starts_pool, key=lambda t: abs(t - start))
+    # Start: latest boundary not past the requested start, so we open at a
+    # sentence (or at least segment) beginning rather than mid-word.
+    def _snap_start(pool: list[float]) -> float | None:
+        at_or_before = [t for t in pool if t <= start + _SNAP_TOLERANCE]
+        if at_or_before and start - max(at_or_before) <= _MAX_START_DRIFT:
+            return max(at_or_before)
+        return None
 
-    # End: earliest sentence end at or after the requested end (round up, never
-    # truncate). Only fall back to nearest if the next sentence end is
-    # unreasonably far off, to avoid tacking on a long unrelated tail.
-    at_or_after = [t for t in ends_pool if t >= end - _SNAP_TOLERANCE]
-    if at_or_after and min(at_or_after) - end <= _MAX_END_DRIFT:
-        snapped_end = min(at_or_after)
-    else:
-        snapped_end = min(ends_pool, key=lambda t: abs(t - end))
+    snapped_start = _snap_start(sent_starts)
+    if snapped_start is None:
+        snapped_start = _snap_start(seg_starts)
+    if snapped_start is None:
+        snapped_start = start
+
+    # End: earliest boundary at or after the requested end (round up, never
+    # truncate the closing thought), within the drift bound.
+    def _snap_end(pool: list[float]) -> float | None:
+        at_or_after = [t for t in pool if t >= end - _SNAP_TOLERANCE]
+        if at_or_after and min(at_or_after) - end <= _MAX_END_DRIFT:
+            return min(at_or_after)
+        return None
+
+    snapped_end = _snap_end(sent_ends)
+    if snapped_end is None:
+        snapped_end = _snap_end(seg_ends)
+    if snapped_end is None:
+        snapped_end = end
     snapped_end += _END_PAD
 
     if snapped_end <= snapped_start:
