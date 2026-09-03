@@ -136,8 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.weekly:
         sermon = video.parent / f"{video.stem}_sermon.mp4"
         done_manifest = (args.out or sermon.parent / f"{sermon.stem}_clips") / "clips.json"
-        if done_manifest.exists() and not args.force:
-            print(f"Already processed — {done_manifest} exists. Use --force to redo.")
+        # A Subsplash item's video can be swapped after the fact (re-upload,
+        # different camera), which changes the filename — so clips for any
+        # recording of the same service date also count as done.
+        same_day = (sorted(video.parent.glob(f"*{recording.date}*_clips/clips.json"))
+                    if recording.date else [])
+        already = done_manifest if done_manifest.exists() else (same_day[0] if same_day else None)
+        if already and not args.force:
+            print(f"Already processed — {already} exists. Use --force to redo.")
             return 0
         common = ["--whisper-model", args.whisper_model]
         if args.language:
