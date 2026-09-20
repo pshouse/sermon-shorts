@@ -16,12 +16,44 @@ def _cache_path(video_path: Path, model_size: str) -> Path:
     return video_path.with_suffix(f".transcript-{model_size}.json")
 
 
+# Whisper decodes in 30-second windows and, by default, hands each window the
+# previous window's text as context. That is how a single window that happens
+# to come out unpunctuated poisons every window after it: the 2026-09-13
+# service punctuated the announcements normally, then lost every period for
+# the sermon's remaining 40 minutes, and the sentence-boundary snapping had
+# nothing to work with. So each window is instead primed with the same short,
+# well-punctuated sample and never with the previous output: a bad window
+# stays one bad window.
+_STYLE_PROMPT = ("Good morning, church. Let's open our Bibles together. "
+                 "Here's what the passage says, and here's why it matters today.")
+_SPARSE_PUNCTUATION = 1 / 200   # sentence ends per word below which we warn
+
+
+def _warn_if_unpunctuated(transcript: dict) -> None:
+    """Flag a transcript whose sentence boundaries can't be trusted.
+
+    Snapping and clip selection both lean on terminal punctuation; without it
+    they fall back to pause boundaries, which often sit mid-sentence.
+    """
+    words = [w["word"].strip() for seg in transcript["segments"]
+             for w in seg.get("words", []) if w["word"].strip()]
+    if not words:
+        return
+    ends = sum(1 for w in words if w[-1] in _SENTENCE_END_CHARS)
+    if ends / len(words) < _SPARSE_PUNCTUATION:
+        print(f"  warning: transcript has almost no punctuation ({ends} sentence ends "
+              f"in {len(words)} words) — clip cuts will lean on pauses. Delete the "
+              f"cached .transcript-*.json to re-transcribe.")
+
+
 def transcribe(video_path: Path, model_size: str = "small", language: str | None = None) -> dict:
     """Return {"language": str, "segments": [{start, end, text, words: [{start, end, word}]}]}."""
     cache = _cache_path(video_path, model_size)
     if cache.exists():
         print(f"  using cached transcript: {cache.name}")
-        return json.loads(cache.read_text(encoding="utf-8"))
+        transcript = json.loads(cache.read_text(encoding="utf-8"))
+        _warn_if_unpunctuated(transcript)
+        return transcript
 
     from faster_whisper import WhisperModel
 
@@ -34,6 +66,8 @@ def transcribe(video_path: Path, model_size: str = "small", language: str | None
         language=language,
         word_timestamps=True,
         vad_filter=True,
+        initial_prompt=_STYLE_PROMPT,
+        condition_on_previous_text=False,
     )
 
     segments = []
@@ -55,6 +89,7 @@ def transcribe(video_path: Path, model_size: str = "small", language: str | None
     result = {"language": info.language, "segments": segments}
     cache.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     print(f"  transcript cached to {cache.name} ({len(segments)} segments)")
+    _warn_if_unpunctuated(result)
     return result
 
 
