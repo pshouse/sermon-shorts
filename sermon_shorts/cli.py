@@ -45,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+    # Posting is its own command so it can never ride along with a render run.
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "publish":
+        from .publish import main as publish_main
+        return publish_main(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="sermon-shorts",
         description="Turn a full church service recording into vertical, captioned social clips.",

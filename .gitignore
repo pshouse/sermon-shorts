@@ -4,3 +4,5 @@ church.json
 __pycache__/
 *.transcript-*.json
 .DS_Store
+youtube_client_secret.json
+.youtube_token.json

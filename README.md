@@ -170,6 +170,85 @@ service instead:
 python -m sermon_shorts sunday.mp4 --speaker "Pastor Mike Jones"
 ```
 
+## Publishing
+
+Nothing is posted automatically — the weekly run only renders clips. Watch
+them, then post the ones you approve by number:
+
+```
+python -m sermon_shorts publish "~/Downloads/Kings and Kingdoms_sermon_clips" 1 3
+```
+
+Leave the folder off to use the newest `*_clips` folder in `~/Downloads`
+(`publish` with no numbers lists its clips). You'll see what's about to go
+out and confirm with `y`; clips post **publicly, right away** to YouTube
+Shorts, Instagram Reels and Facebook Reels, using the title, description and
+cover image already generated. Each post is recorded in the folder's
+`published.json`, so running the same command again never double-posts.
+
+| Flag | Meaning |
+|---|---|
+| `--to youtube instagram facebook` | post only to these (default: every connected platform) |
+| `--dry-run` | show what would be posted, post nothing |
+| `--yes` | skip the confirmation prompt |
+| `--connect youtube` / `--connect meta` | one-time account setup (below) |
+
+### One-time setup: YouTube
+
+1. At https://console.cloud.google.com create a project and enable the
+   **YouTube Data API v3**.
+2. Set up the OAuth consent screen (External), then **publish the app to
+   "In production"** — while it's in "Testing" the login expires every 7 days.
+   You'll get an "unverified app" warning when you log in; for a tool only
+   you use, click *Advanced → continue*.
+3. Create an **OAuth client ID** of type *Desktop app*, download the JSON, and
+   save it in the project folder as `youtube_client_secret.json`.
+4. Run `python -m sermon_shorts publish --connect youtube` and log in as the
+   church channel.
+5. **Request YouTube's API audit** (the "YouTube API Services — Audit and
+   Quota Extension" form). Google's docs say unaudited projects' uploads are
+   locked private; ours have gone up public anyway, but the audit protects
+   against that changing. It takes weeks, not minutes, and doesn't block
+   posting in the meantime.
+
+The Google login that runs `--connect youtube` may own more than one channel —
+pick the church channel in the chooser, and check the first upload landed
+there.
+
+The default quota allows about six uploads a day. YouTube's Shorts feed may
+still pick its own frame even when the cover image is set.
+
+### One-time setup: Instagram + Facebook
+
+1. The Instagram account must be a **Professional** (Business or Creator)
+   account **linked to the church's Facebook Page**.
+2. At https://developers.facebook.com create an app (Business type) with
+   Facebook Login for Business. No App Review is needed (you're an admin of the
+   app), but the app **must be switched to Live**: in development mode its
+   Facebook posts are hidden from everyone without a role on the app. Going Live
+   needs a privacy policy URL, a data deletion instructions URL, an app icon and
+   a category under *App settings → Basic*.
+3. Copy the App ID and App Secret (*App settings → Basic*) into `.env` as
+   `META_APP_ID` and `META_APP_SECRET`.
+4. Under Facebook Login for Business, create a **configuration** (User access
+   token; Pages and Instagram assets) with the permissions below — it may first
+   ask you to switch `public_profile` to advanced access, which is one click.
+   Then in the **Graph API Explorer**, pick your app and that configuration to get a User token with
+   `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`,
+   `instagram_basic`, `instagram_content_publish` and `business_management`,
+   and grant it the church Page and Instagram account.
+5. Run `python -m sermon_shorts publish --connect meta` and paste that
+   token. It is exchanged for a Page token that doesn't expire and saved to
+   `.env`.
+
+Instagram's API only accepts a cover image from a public URL, so Reels get
+the first frame as their cover — change it in the Instagram app if you like.
+Facebook Reels get the designed cover.
+
+Instagram's API also rejects Reels longer than about 65 seconds (an opaque
+`ProcessingFailedError`, regardless of file size). `publish` skips Instagram
+for longer clips and says so — post those from the Instagram app.
+
 ## Notes
 
 - **First run downloads the Whisper model** (~500 MB for `small`) — after that it
