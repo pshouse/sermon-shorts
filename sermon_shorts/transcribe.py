@@ -138,16 +138,23 @@ def transcript_as_text(transcript: dict) -> str:
     return "\n".join(lines)
 
 
+def _all_words(transcript: dict) -> list[dict]:
+    """Every non-empty whisper word in the transcript, in time order."""
+    words = [w for seg in transcript["segments"] for w in seg.get("words", [])
+             if w["word"].strip()]
+    words.sort(key=lambda w: w["start"])
+    return words
+
+
 def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
-    """All whisper words that fall inside [start, end]."""
-    out = []
-    for seg in transcript["segments"]:
-        if seg["end"] < start or seg["start"] > end:
-            continue
-        for w in seg["words"]:
-            if w["start"] >= start - 0.05 and w["end"] <= end + 0.05:
-                out.append(w)
-    return out
+    """All whisper words spoken inside [start, end].
+
+    A word belongs to the clip if it *begins* inside it: whisper's word-end
+    timestamps run late often enough that requiring the end to fit would
+    drop the last word of a clip whose cut was tightened up to the next word.
+    """
+    return [w for w in _all_words(transcript)
+            if w["start"] >= start - 0.05 and w["start"] < end - 0.05]
 
 
 # Snapping tunables. The end is rounded *forward* to the next real sentence
@@ -172,17 +179,13 @@ def _sentence_boundaries(transcript: dict) -> tuple[list[float], list[float]]:
     starts: list[float] = []
     ends: list[float] = []
     expecting_start = True
-    for seg in transcript["segments"]:
-        for w in seg.get("words", []):
-            text = w["word"].strip()
-            if not text:
-                continue
-            if expecting_start:
-                starts.append(w["start"])
-                expecting_start = False
-            if text[-1] in _SENTENCE_END_CHARS:
-                ends.append(w["end"])
-                expecting_start = True
+    for w in _all_words(transcript):
+        if expecting_start:
+            starts.append(w["start"])
+            expecting_start = False
+        if w["word"].strip()[-1] in _SENTENCE_END_CHARS:
+            ends.append(w["end"])
+            expecting_start = True
     return starts, ends
 
 
@@ -237,3 +240,49 @@ def snap_to_sentences(transcript: dict, start: float, end: float) -> tuple[float
     if snapped_end <= snapped_start:
         return start, end
     return snapped_start, snapped_end
+
+
+# How far the audio-based refinement may move a cut off the transcript's
+# timestamps, and the clearance kept from neighbouring words.
+_WORD_GAP = 0.05          # never cut closer than this to a neighbouring word
+_START_SEARCH = 0.6       # look this far before the first word for a quiet spot
+_END_SEARCH = 0.35        # look this far back from the padded end for a quiet spot
+
+
+def cut_windows(transcript: dict, start: float, end: float
+                ) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Ranges in which the real cut points may sit, from the word timings.
+
+    Returns ((start_lo, start_hi), (end_lo, end_hi)). The start window ends
+    just before the clip's first word and reaches back to just after the
+    previous word; the end window runs from just after the last word to the
+    padded end — but never past the *next* word, so a tail pad can't catch
+    the first syllable of the following sentence. Whisper's timestamps are
+    only good to a few hundred ms, so render.quietest_point() picks the
+    actual gap inside each window.
+    """
+    words = _all_words(transcript)
+    # `end` carries the tail pad; the words are the ones that begin before
+    # the pad. Strictly before: whisper often starts the next sentence's
+    # first word at the very instant the last one ends.
+    inside = [w for w in words if start - 0.05 <= w["start"] < end - _END_PAD]
+    if not inside:
+        return (start, start), (end, end)
+    first, last = inside[0], inside[-1]
+    before = [w for w in words if w["end"] <= first["start"]]
+    after = [w for w in words if w["start"] > last["start"]]
+
+    s_hi = first["start"] - _WORD_GAP
+    s_lo = max(0.0, first["start"] - _START_SEARCH)
+    if before:
+        s_lo = max(s_lo, before[-1]["end"] + _WORD_GAP)
+    if s_lo >= s_hi:
+        s_lo = max(0.0, s_hi - 0.1)
+
+    e_hi = end
+    if after:
+        e_hi = min(e_hi, after[0]["start"] - _WORD_GAP)
+    e_lo = max(last["end"] + _WORD_GAP, e_hi - _END_SEARCH)
+    if e_lo >= e_hi:
+        e_lo = e_hi - 0.15
+    return (s_lo, s_hi), (e_lo, e_hi)

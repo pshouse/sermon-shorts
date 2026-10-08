@@ -43,7 +43,9 @@ What makes a great church clip:
 - A complete, self-contained thought from the sermon: a powerful one-liner, a vivid \
 illustration or story, a practical application of scripture, an encouraging word, or a \
 moment of humor that lands without context.
-- It starts at the natural beginning of a sentence or story and ends on a resolved thought.
+- It starts at the natural beginning of a sentence or story and ends on a resolved thought. \
+If the sentence right after your chosen end completes or applies the point (it starts with \
+"And", "So", "That's why"...), include it — a clip must never feel cut off mid-application.
 - Someone scrolling who has never attended this church would stop, watch, and understand it.
 
 Strictly avoid:

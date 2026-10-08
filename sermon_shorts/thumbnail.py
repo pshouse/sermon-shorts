@@ -14,55 +14,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import cv2
-
-from .reframe import crop_filter
+from .reframe import SpeakerTrack, crop_filter
 from .render import ffmpeg_exe, VIDEO_DENOISE, VIDEO_SHARPEN, _run
 
 
-def pick_thumbnail_frame(video_path: Path, start: float, end: float
+def pick_thumbnail_frame(track: SpeakerTrack, start: float, end: float
                          ) -> tuple[float, float]:
-    """Find a good cover frame: the moment with the largest, clearest face.
+    """Find a good cover frame: the speaker's clearest sighting in the clip.
 
-    Returns (absolute_time, face_center_x_fraction). Samples across the middle
-    of the clip (skipping the first/last ~15% where cuts land) and keeps the
-    frame whose biggest detected face has the largest area. Falls back to the
-    clip midpoint, center-framed, if no face is ever found.
+    Returns (absolute_time, face_center_x_fraction). Reuses the speaker track
+    from the reframing pass — so the frame is the *speaker*, not whichever
+    front-row head happens to be biggest — and skips the first/last ~15%
+    where cuts land. Falls back to the clip midpoint on the tracked centre
+    (or the frame centre) if the speaker was never seen.
     """
-    cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    )
-    cap = cv2.VideoCapture(str(video_path))
-    span = end - start
-    lo, hi = start + span * 0.15, end - span * 0.15
-    step = max(0.4, (hi - lo) / 30.0)  # ~30 samples, never denser than 0.4s
-
-    best_area = 0.0
-    best = (start + span / 2.0, 0.5)  # fallback: midpoint, centered
-    try:
-        if cap.isOpened():
-            t = lo
-            while t <= hi:
-                cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
-                ok, frame = cap.read()
-                if ok and frame is not None:
-                    h, w = frame.shape[:2]
-                    scale = 640.0 / w if w > 640 else 1.0
-                    small = (cv2.resize(frame, (int(w * scale), int(h * scale)))
-                             if scale < 1.0 else frame)
-                    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-                    faces = cascade.detectMultiScale(gray, scaleFactor=1.1,
-                                                     minNeighbors=5, minSize=(24, 24))
-                    if len(faces) > 0:
-                        x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
-                        area = fw * fh
-                        if area > best_area:
-                            best_area = area
-                            best = (t, (x + fw / 2.0) / small.shape[1])
-                t += step
-    finally:
-        cap.release()
-    return best
+    best = track.best_sample()
+    if best is not None:
+        return best
+    mid = start + (end - start) / 2.0
+    return mid, (track.centers[len(track.centers) // 2] if track.centers else 0.5)
 
 
 # Big centered headline in the lower third, heavy black outline + soft shadow

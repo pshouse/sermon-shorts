@@ -13,11 +13,12 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .transcribe import (transcribe, transcript_as_text, snap_to_sentences,
-                         words_in_range, save_shifted_transcript)
+                         cut_windows, words_in_range, save_shifted_transcript)
 from .highlights import select_highlights, find_sermon, Clip, ClipSelection
-from .reframe import track_speaker, build_pan_keyframes, crop_filter, video_dimensions
+from .reframe import (FaceDetector, track_speaker, build_pan_keyframes, crop_filter,
+                      video_dimensions)
 from .captions import write_ass, CAPTION_POSITION_CHOICES, resolve_caption_position
-from .render import render_clip, trim_video
+from .render import render_clip, trim_video, quietest_point
 from .thumbnail import pick_thumbnail_frame, render_thumbnail
 
 
@@ -232,17 +233,27 @@ def main(argv: list[str] | None = None) -> int:
             sys.exit(f"--only {args.only}: manifest has clips 1-{len(selection.clips)}")
 
     src_w, src_h = video_dimensions(video)
+    detector = FaceDetector()
     manifest = []
 
     for i, clip in items:
         start, end = snap_to_sentences(transcript, clip.start, clip.end)
+        # Whisper's word timestamps are only good to a few hundred ms, so
+        # settle each cut on the quietest instant of the gap around it — and
+        # never past the first syllable of the next sentence.
+        (s_lo, s_hi), (e_lo, e_hi) = cut_windows(transcript, start, end)
+        start = quietest_point(video, s_lo, s_hi, default=start)
+        end = quietest_point(video, e_lo, e_hi, default=end)
         duration = end - start
         print(f"[3/4] Clip {i}/{len(selection.clips)}: \"{clip.title}\" "
               f"({start:.0f}s-{end:.0f}s, {duration:.0f}s, score {clip.score})")
 
         print("  tracking speaker for vertical crop...")
-        times, centers, face_band = track_speaker(video, start, end)
-        keyframes = build_pan_keyframes(times, centers, duration)
+        track = track_speaker(video, start, end, detector)
+        seen = sum(f is not None for f in track.faces)
+        print(f"  speaker seen in {seen}/{len(track.faces)} samples ({detector.name})")
+        face_band = track.face_band
+        keyframes = build_pan_keyframes(track.times, track.centers, duration)
         pans = max(0, (len(keyframes) - 2) // 2)
         if pans:
             print(f"  speaker moves {pans} time(s) — crop will pan to follow")
@@ -266,11 +277,13 @@ def main(argv: list[str] | None = None) -> int:
                               position=position)
 
             print("  rendering...")
-            render_clip(video, start, end, vf, ass_path, out_path)
+            audio = render_clip(video, start, end, vf, ass_path, out_path)
+            print(f"  audio: source {audio['source_lufs']:.1f} LUFS, "
+                  f"leveled {audio['gain_db']:+.1f} dB")
 
             if not args.no_thumbnails:
                 print("  designing cover thumbnail...")
-                t_thumb, thumb_center = pick_thumbnail_frame(video, start, end)
+                t_thumb, thumb_center = pick_thumbnail_frame(track, start, end)
                 thumb_path = out_path.with_suffix(".jpg")
                 render_thumbnail(video, t_thumb, thumb_center, src_w, src_h,
                                  clip.title, thumb_path, Path(tmp))

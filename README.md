@@ -15,10 +15,15 @@ Give it the Sunday service MP4 and it will:
    that work for someone who has never attended your church. It deliberately skips
    worship music (CCLI/music licensing generally does **not** cover social media),
    announcements, and offering segments.
-3. **Reframe to 9:16** — finds the speaker's face and crops the vertical frame around them
+3. **Reframe to 9:16** — tracks the speaker's face through the clip (a bundled
+   YuNet detector that still sees a small face in a wide, dim stage shot) and
+   crops the vertical frame around them, panning when they walk
 4. **Burn in pop-style captions** from the transcript
-5. **Render** 1080x1920 MP4s ready for Reels / Shorts / TikTok, with speech
-   loudness-normalized to the −14 LUFS social standard
+5. **Render** 1080x1920 MP4s ready for Reels / Shorts / TikTok. Speech is
+   leveled in two measured passes — compressed so a peaky room mic doesn't
+   sound thin, then brought to −13 LUFS with a true-peak limiter — and each
+   cut is settled on the actual gap between words so a clip never ends on
+   the first syllable of the next sentence
 6. **Design a cover thumbnail** (`<clip>.jpg`) for each clip — a clean,
    caption-free frame centered on the speaker with the headline in bold —
    so the platform doesn't auto-pick an awkward mid-clip frame
@@ -175,8 +180,15 @@ python -m sermon_shorts sunday.mp4 --speaker "Pastor Mike Jones"
   15–45 minutes on a typical laptop CPU with the `small` model. Use `tiny` for a
   quick test pass.
 - **Camera assumptions:** built for typical church footage — a static or slow
-  camera on the speaker. The crop is computed once per clip from the median face
-  position, which keeps it rock-steady. Multi-camera switched feeds work too;
-  fast-moving handheld footage is not the target.
+  camera on the speaker, wide stage shots included. The speaker is picked by
+  who is on screen most of the clip, not by who has the biggest face, so
+  front-row heads and faces on the slides don't steal the crop. The crop holds
+  still while the speaker stays put and pans smoothly when they walk.
+  Multi-camera switched feeds work too; fast-moving handheld footage is not
+  the target.
+- **Audio level:** clips are leveled to −13 LUFS, true peak −1 dB (constants
+  at the top of `sermon_shorts/render.py` if your platform wants something
+  else). YouTube turns loud uploads down to −14 itself; Reels/TikTok mostly
+  play what you give them.
 - **Cost:** one Claude call per run, text only — typically a few cents for a
   full-service transcript.

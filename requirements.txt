@@ -1,6 +1,6 @@
 anthropic>=0.70
 faster-whisper>=1.0
-opencv-python>=4.9,<5  # 4.x wheels bundle the Haar face cascade; 5.0 dropped it
+opencv-python>=4.9,<5  # FaceDetectorYN + the bundled static-shape YuNet model target 4.x
 imageio-ffmpeg>=0.5
 numpy>=1.26
 pydantic>=2.6
