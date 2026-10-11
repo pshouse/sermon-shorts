@@ -1,0 +1,51 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A Python CLI that turns a full church service recording into vertical (1080x1920), captioned social clips, and optionally posts reviewed clips to YouTube Shorts / Instagram Reels / Facebook Reels. Everything runs locally except the Claude API call (text transcript only) and the publish/Subsplash network calls. README.md is the user-facing manual and documents every flag and the one-time YouTube/Meta setup.
+
+## Commands
+
+```
+source .venv/bin/activate
+pip install -r requirements.txt
+
+python -m sermon_shorts <video.mp4> --clips 3            # full clip pipeline
+python -m sermon_shorts <video.mp4> --sermon-only        # trim service to just the sermon
+python -m sermon_shorts --weekly                         # Subsplash fetch → sermon trim → clips (idempotent)
+python -m sermon_shorts <video.mp4> --from-manifest --only 2   # re-render one clip from clips.json, no Claude call
+python -m sermon_shorts publish [<clips folder>] 1 3 --dry-run # preview what would be posted
+```
+
+There is no test suite, linter, or build step. To check a change, run the pipeline on a real recording: `--whisper-model tiny` makes a quick transcription pass, and once a transcript is cached, `--from-manifest --only N` re-renders a single clip (reframe, captions, audio, thumbnail) without spending a Claude call. Use `publish --dry-run` when touching `publish.py`. Without `--dry-run`, `publish` posts **publicly and immediately**, so never run it to test.
+
+## Architecture
+
+`cli.main()` orchestrates a linear pipeline across modules; each module owns one stage:
+
+1. **`transcribe.py`**: faster-whisper with word-level timestamps, cached as `<video>.transcript-<model>.json` next to the video. Also owns all transcript-time logic: `snap_to_sentences` (moves Claude's rough bounds to sentence boundaries derived from word punctuation, with bounded drift and a fallback to segment boundaries) and `cut_windows` (the range between neighbouring words where a cut may land).
+2. **`highlights.py`**: two Claude structured-output calls via `client.messages.parse()` into Pydantic models: `find_sermon` → `SermonWindow`, `select_highlights` → `ClipSelection`. The prompts live here, and so do the church-profile context and footer injection and the punctuation normalization of descriptions.
+   **`jev.py`** is the experimental alternative to `find_sermon`, selected with `--labeler jev`. TypeSafe's Jev model labels ~45s transcript windows by service part, and the sermon is the longest run of sermon windows, with short gaps bridged. Its key is `JEV_API_KEY`, not the SDK's default `TYPESAFE_API_KEY`. Each labeler's raw window is recorded in `<video>.sermon-windows.json` so the two can be compared.
+3. **`render.py`**: the ffmpeg-based stages, using the binary bundled by `imageio-ffmpeg` (no system ffmpeg): `quietest_point` refines each cut inside the `cut_windows` range from the audio itself, `render_clip` runs the two-pass loudness chain plus crop, captions and denoise/sharpen, and `trim_video` handles `--sermon-only`. Audio/video tuning constants sit at the top of the file.
+4. **`reframe.py`**: YuNet face detection (bundled ONNX in `sermon_shorts/models/`, needs OpenCV 4.x). `track_speaker` samples faces and `choose_speaker` picks the speaker by on-screen persistence, not face size. `build_pan_keyframes` produces hold-then-pan keyframes and `crop_filter` turns them into an ffmpeg crop expression. `SpeakerTrack.face_band` feeds caption auto-positioning.
+5. **`captions.py`**: writes an ASS subtitle file (2–3 word pop chunks). `render.py` references it by bare filename with ffmpeg's cwd set to the temp dir, which avoids Windows path escaping in the subtitles filter.
+6. **`thumbnail.py`**: picks a frame from the speaker track and renders a caption-free cover `.jpg` with the title.
+7. **`subsplash.py`**: anonymous guest-token fetch of the newest recording from a church's public Subsplash feed (`--latest` / `--weekly`).
+8. **`publish.py`**: a separate subcommand, dispatched from the top of `cli.main()` when `argv[0] == "publish"` so it can never ride along with a render run. It records every post in the clips folder's `published.json`, and that ledger is what prevents double-posting.
+
+Key cross-cutting facts:
+- **All clip times are seconds in the source video passed to that run.** `--sermon-only` writes a re-based transcript cache for the trimmed `_sermon.mp4` (`save_shifted_transcript`) so the next clips run skips transcription. `--weekly` simply recurses into `main()` twice (sermon trim, then clips on the sermon file).
+- **Outputs** go in `<video>_clips/`: `NN_<slug>.mp4`, a `.txt` with title and description, a `.jpg` cover, `clips.json` (the manifest that `--from-manifest` and `publish` read), and `published.json`.
+- **`--weekly` idempotence** is decided by an existing `clips.json`, including any `*<service date>*_clips/` folder, because Subsplash can swap the video file after the fact.
+- **Config and secrets** all sit in the project root and are gitignored: `.env` (`ANTHROPIC_API_KEY`, `META_*`; `publish --connect meta` writes into it), `church.json` (church_name, speaker, footer, subsplash), `youtube_client_secret.json`, `.youtube_token.json`. `church.json` is looked up in the cwd first, then the project root.
+- Heavy or optional dependencies (faster_whisper, anthropic, httpx, Google client) are imported inside functions so that unrelated modes stay fast and still work when an optional dependency is missing.
+- The Claude model ID is the `MODEL` constant in `highlights.py`.
+- `scripts/weekly_cron.sh` is the macOS launchd entry point: it polls Subsplash on Sunday afternoons, logs to `~/Library/Logs/sermon-shorts.log`, sends a notification, and shuts down an idle Mac. It parses the CLI's `Latest service` and `clip(s) rendered` output lines, so keep those strings stable.
+
+## Conventions
+
+- The code comments explain *why* a tuning value exists, often citing the real service or measurement that motivated it (e.g. `IG_MAX_SECONDS`, `_STYLE_PROMPT`). Keep that style when changing heuristics.
+- Commit messages are a single imperative sentence describing the behavioural outcome (see `git log`).
+- Descriptions and titles must stay plain keyboard punctuation (no em dashes or smart quotes) because they get pasted into upload forms.
