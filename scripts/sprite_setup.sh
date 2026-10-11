@@ -19,7 +19,7 @@ echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select t
     | sudo debconf-set-selections
 sudo apt-get -qq update
 sudo DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
-    libxcb1 libgl1 libglib2.0-0 fontconfig ttf-mscorefonts-installer >/dev/null
+    libxcb1 libgl1 libglib2.0-0 fontconfig ttf-mscorefonts-installer caddy >/dev/null
 fc-list | grep -qi "arial black" || { echo "Arial Black did not install"; exit 1; }
 
 [ -d .venv ] || python3 -m venv .venv
@@ -35,4 +35,11 @@ done
 
 mkdir -p "$HOME/Downloads" "$HOME/logs"
 chmod +x scripts/*.sh
+
+# Read-only review page for the rendered clips, behind the sprite URL's org
+# auth. Caddy rather than python -m http.server: iOS won't play an MP4
+# without byte-range support.
+sprite-env services list | grep -q '"name":"clips"' || sprite-env services create clips \
+    --cmd /usr/bin/caddy --args "file-server,--root,$HOME/Downloads,--browse,--listen,:8080" \
+    --http-port 8080 --no-stream
 echo "sprite ready"

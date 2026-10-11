@@ -50,6 +50,7 @@ The weekly run and `publish` also run on a Fly.io sprite named `sermon-shorts` (
 - **Trigger:** sprites have no scheduler, so `.github/workflows/weekly.yml` wakes it on Sunday afternoons and stays attached while `scripts/sprite_weekly.sh` runs there. The workflow needs the `SPRITES_TOKEN` repository secret.
 - **The run script:** it renews a 5-minute task hold every minute because a hold lasts at most an hour. It runs `git pull` before every job, so pushing to `main` deploys. It sets `HF_HUB_OFFLINE=1` because the sprite's shared IP gets rate-limited by the Hugging Face Hub, and the medium model is pre-cached in `~/.cache/huggingface`. Logs go to `~/logs/`.
 - **Provisioning:** `scripts/sprite_setup.sh` installs everything the sprite needs and is safe to re-run: apt libraries for OpenCV, Arial Black, the venv and the pre-cached model. Without the font, libass silently renders captions and cover titles as nothing.
+- **Review:** a sprite service named `clips` runs Caddy's file server, read-only, over `~/Downloads` on port 8080. It is reached through the sprite URL, which requires org auth. Caddy was chosen because it supports byte-range requests, which iOS needs to play MP4s.
 - **Secrets:** `.env`, `church.json` and the YouTube files are copied in with `sprite file push`; they are not in git.
 - **Commands:** `sprite exec -s sermon-shorts --no-stdin -- bash -lc '<cmd>'` runs things there, and `sprite file pull` fetches outputs.
 
