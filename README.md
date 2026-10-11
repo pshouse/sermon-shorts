@@ -170,6 +170,31 @@ service instead:
 python -m sermon_shorts sunday.mp4 --speaker "Pastor Mike Jones"
 ```
 
+### Trying Jev to find the sermon
+
+`--labeler jev` (with `--sermon-only` or `--weekly`) finds the sermon with
+[TypeSafe's Jev](https://docs.typesafe.ai/introduction) model instead of
+Claude: it labels the transcript in ~45-second windows (worship,
+announcements, sermon, prayer...) and keeps the longest stretch of sermon.
+Put `JEV_API_KEY=...` in `.env`. Each labeler's answer is saved to
+`<video>.sermon-windows.json`, so running both on the same service lets you
+compare them.
+
+### Running in the cloud
+
+The weekly run can live on a [Fly.io sprite](https://docs.fly.io/sprites)
+instead of a home computer. `.github/workflows/weekly.yml` wakes the sprite
+on Sunday afternoons and runs `scripts/sprite_weekly.sh` there (add a
+`SPRITES_TOKEN` repository secret); it can also be started by hand from the
+repository's Actions tab, choosing the labeler. Provision a new sprite with
+`scripts/sprite_setup.sh` (see the comments at its top), then copy `.env`, `church.json`
+and the YouTube files onto the sprite with `sprite file push` — they never
+go in git. Publish from there the same way:
+
+```
+sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts publish 1 3'
+```
+
 ## Publishing
 
 Nothing is posted automatically — the weekly run only renders clips. Watch

@@ -1,0 +1,53 @@
+# Sunday-afternoon trigger for the weekly run on the Fly.io sprite.
+#
+# Sprites have no scheduler of their own, so this job wakes the sprite and
+# stays attached while scripts/sprite_weekly.sh runs there (the log streams
+# into the job). It fires every 30 minutes through the early afternoon
+# because the Subsplash upload lands at an unpredictable time; --weekly is a
+# no-op once the newest service's clips exist, and the concurrency group
+# queues a trigger behind a run still in progress instead of starting a
+# second copy of it.
+#
+# Needs one repository secret: SPRITES_TOKEN (org-slug/org-id/token-id/value).
+name: weekly
+
+on:
+  schedule:
+    # 12:00-15:30 US Eastern on Sundays (UTC, so it drifts an hour with DST)
+    - cron: "0,30 16-19 * * 0"
+  workflow_dispatch:
+    inputs:
+      labeler:
+        description: "what finds the sermon"
+        type: choice
+        options: [claude, jev]
+        default: claude
+      force:
+        description: "redo even if this service's clips exist"
+        type: boolean
+        default: false
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Install the sprite CLI
+        run: |
+          curl -fsSL https://sprites.dev/install.sh | sh -s -- --bin-dir "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate
+        run: sprite auth setup --token "${{ secrets.SPRITES_TOKEN }}"
+
+      - name: Weekly run on the sprite
+        env:
+          LABELER: ${{ inputs.labeler || 'claude' }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: |
+          sprite exec -s sermon-shorts --no-stdin -- \
+            /home/sprite/sermon-shorts/scripts/sprite_weekly.sh --labeler "$LABELER" $FORCE

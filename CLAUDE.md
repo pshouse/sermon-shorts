@@ -44,6 +44,15 @@ Key cross-cutting facts:
 - The Claude model ID is the `MODEL` constant in `highlights.py`.
 - `scripts/weekly_cron.sh` is the macOS launchd entry point: it polls Subsplash on Sunday afternoons, logs to `~/Library/Logs/sermon-shorts.log`, sends a notification, and shuts down an idle Mac. It parses the CLI's `Latest service` and `clip(s) rendered` output lines, so keep those strings stable.
 
+## Cloud (Fly.io sprite)
+
+The weekly run and `publish` also run on a Fly.io sprite named `sermon-shorts` (Ubuntu, a checkout at `/home/sprite/sermon-shorts`, outputs in `/home/sprite/Downloads`).
+- **Trigger:** sprites have no scheduler, so `.github/workflows/weekly.yml` wakes it on Sunday afternoons and stays attached while `scripts/sprite_weekly.sh` runs there. The workflow needs the `SPRITES_TOKEN` repository secret.
+- **The run script:** it renews a 5-minute task hold every minute because a hold lasts at most an hour. It runs `git pull` before every job, so pushing to `main` deploys. It sets `HF_HUB_OFFLINE=1` because the sprite's shared IP gets rate-limited by the Hugging Face Hub, and the medium model is pre-cached in `~/.cache/huggingface`. Logs go to `~/logs/`.
+- **Provisioning:** `scripts/sprite_setup.sh` installs everything the sprite needs and is safe to re-run: apt libraries for OpenCV, Arial Black, the venv and the pre-cached model. Without the font, libass silently renders captions and cover titles as nothing.
+- **Secrets:** `.env`, `church.json` and the YouTube files are copied in with `sprite file push`; they are not in git.
+- **Commands:** `sprite exec -s sermon-shorts --no-stdin -- bash -lc '<cmd>'` runs things there, and `sprite file pull` fetches outputs.
+
 ## Conventions
 
 - The code comments explain *why* a tuning value exists, often citing the real service or measurement that motivated it (e.g. `IG_MAX_SECONDS`, `_STYLE_PROMPT`). Keep that style when changing heuristics.
