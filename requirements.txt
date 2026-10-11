@@ -8,3 +8,4 @@ python-dotenv>=1.0
 httpx>=0.27  # Subsplash --latest fetch (already pulled in by anthropic)
 google-api-python-client>=2.100  # publish: YouTube upload
 google-auth-oauthlib>=1.2        # publish: one-time YouTube login
+typesafe-sdk>=0.7  # --labeler jev: sermon finding with TypeSafe's Jev

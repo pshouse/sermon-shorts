@@ -3,6 +3,7 @@ church.json
 .venv/
 __pycache__/
 *.transcript-*.json
+*.sermon-windows.json
 .DS_Store
 youtube_client_secret.json
 .youtube_token.json

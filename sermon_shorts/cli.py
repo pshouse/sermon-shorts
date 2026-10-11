@@ -34,6 +34,20 @@ def _load_church() -> dict | None:
     return None
 
 
+def _record_sermon_window(video: Path, labeler: str, window, labeled: list | None) -> None:
+    """Keep each labeler's raw sermon window side by side, so Claude and Jev
+    can be compared on the same service (<video>.sermon-windows.json)."""
+    path = video.with_suffix(".sermon-windows.json")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        record = {}
+    record[labeler] = window.model_dump()
+    if labeled is not None:
+        record[labeler]["windows"] = labeled
+    path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def _slug(text: str, max_len: int = 40) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
     return slug[:max_len] or "clip"
@@ -86,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sermon-only", action="store_true",
                         help="instead of making clips, trim the service down to just the "
                              "sermon and save it as <video>_sermon.mp4")
+    parser.add_argument("--labeler", default="claude", choices=["claude", "jev"],
+                        help="with --sermon-only/--weekly: what finds the sermon — Claude "
+                             "(default) or TypeSafe's Jev model labeling the transcript "
+                             "window by window (needs JEV_API_KEY)")
     parser.add_argument("--reencode", action="store_true",
                         help="with --sermon-only: frame-accurate cut (slower); default is a "
                              "lossless instant stream copy that cuts on the nearest keyframe")
@@ -153,10 +171,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Already processed — {already} exists. Use --force to redo.")
             return 0
         common = ["--whisper-model", args.whisper_model]
+        trim_opts = ["--labeler", args.labeler, *(["--reencode"] if args.reencode else [])]
         if args.language:
             common += ["--language", args.language]
-        rc = main([str(video), "--sermon-only",
-                   *(["--reencode"] if args.reencode else []), *common])
+        rc = main([str(video), "--sermon-only", *trim_opts, *common])
         if rc:
             return rc
         print(f"\nNow cutting clips from {sermon.name}")
@@ -183,8 +201,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit("No speech found in the video.")
 
     if args.sermon_only:
-        print("[2/3] Finding the sermon with Claude")
-        window = find_sermon(transcript_as_text(transcript))
+        if args.labeler == "jev":
+            from .jev import find_sermon_jev
+            print("[2/3] Finding the sermon with Jev")
+            window, labeled = find_sermon_jev(transcript)
+        else:
+            print("[2/3] Finding the sermon with Claude")
+            window = find_sermon(transcript_as_text(transcript))
+            labeled = None
+        _record_sermon_window(video, args.labeler, window, labeled)
         start, end = snap_to_sentences(transcript, window.start, window.end)
         start = max(0.0, start - 3.0)  # padding also absorbs the keyframe snap
         end = end + 3.0
