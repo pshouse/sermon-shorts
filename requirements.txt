@@ -1,4 +1,4 @@
-anthropic>=0.70
+anthropic>=1.13  # streamed structured output + server-side refusal fallback
 faster-whisper>=1.0
 av<19  # PyAV 19 dropped open(metadata_errors=), which faster-whisper 1.2.1 still passes
 opencv-python>=4.9,<5  # FaceDetectorYN + the bundled static-shape YuNet model target 4.x

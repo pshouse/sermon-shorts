@@ -294,5 +294,7 @@ for longer clips and says so — post those from the Instagram app.
   at the top of `sermon_shorts/render.py` if your platform wants something
   else). YouTube turns loud uploads down to −14 itself; Reels/TikTok mostly
   play what you give them.
-- **Cost:** one Claude call per run, text only — typically a few cents for a
-  full-service transcript.
+- **Cost:** two Claude calls per run (Fable 5.1, text only): one to pick
+  candidate clips and one to check each candidate stands on its own as a
+  whole idea. Typically about 60 cents per service, plus about 30 cents more
+  when Claude also finds the sermon.

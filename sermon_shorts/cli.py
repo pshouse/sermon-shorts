@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .transcribe import (transcribe, transcript_as_text, snap_to_sentences,
-                         cut_windows, words_in_range, save_shifted_transcript)
+                         cut_windows, words_in_range, save_shifted_transcript,
+                         locate_quote, END_PAD)
 from .highlights import select_highlights, find_sermon, Clip, ClipSelection
 from .reframe import (FaceDetector, track_speaker, build_pan_keyframes, crop_filter,
                       video_dimensions)
@@ -239,7 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         saved = json.loads(manifest_file.read_text(encoding="utf-8"))
         selection = ClipSelection(
             service_summary=saved.get("summary", ""),
-            clips=[Clip(title=c["title"], hook=c.get("hook", ""), start=c["start"],
+            clips=[Clip(title=c["title"], hook=c.get("hook", ""), ending=c.get("ending", ""),
+                        start=c["start"],
                         end=c["end"], score=c.get("score", 0), reason=c.get("reason", ""),
                         description=c.get("description", ""))
                    for c in saved["clips"]],
@@ -250,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                   f"(church profile: {church.get('church_name', 'unnamed')})")
         else:
             print(f"[2/4] Selecting the {args.clips} best moments with Claude")
-        selection = select_highlights(transcript_as_text(transcript), args.clips, church=church)
+        selection = select_highlights(transcript, args.clips, church=church)
         if not selection.clips:
             sys.exit("Claude did not find any suitable clips. Try a larger --clips value or check the transcript cache.")
         print(f"  service summary: {selection.service_summary}")
@@ -268,13 +270,29 @@ def main(argv: list[str] | None = None) -> int:
     manifest = []
 
     for i, clip in items:
-        start, end = snap_to_sentences(transcript, clip.start, clip.end)
-        # Whisper's word timestamps are only good to a few hundred ms, so
-        # settle each cut on the quietest instant of the gap around it — and
-        # never past the first syllable of the next sentence.
-        (s_lo, s_hi), (e_lo, e_hi) = cut_windows(transcript, start, end)
-        start = quietest_point(video, s_lo, s_hi, default=start)
-        end = quietest_point(video, e_lo, e_hi, default=end)
+        if args.from_manifest:
+            # Saved times are already final cuts; snapping them again would
+            # drift the clip a little on every re-render.
+            start, end = clip.start, clip.end
+        else:
+            start, end = snap_to_sentences(transcript, clip.start, clip.end)
+            # Cut on the quoted words where they can be found. Snapping to
+            # punctuation would reach into the neighbouring thought wherever
+            # whisper left out the period between them.
+            hook_at = locate_quote(transcript, clip.hook, clip.start)
+            end_at = locate_quote(transcript, clip.ending, clip.end, closing=True)
+            if hook_at is not None:
+                start = hook_at
+            if end_at is not None and end_at > start:
+                end = end_at + END_PAD
+            print(f"  clip {i}: start {'on its opening words' if hook_at is not None else 'snapped (opening words not found)'}, "
+                  f"end {'on its closing words' if end_at is not None else 'snapped (closing words not found)'}")
+            # Whisper's word timestamps are only good to a few hundred ms, so
+            # settle each cut on the quietest instant of the gap around it — and
+            # never past the first syllable of the next sentence.
+            (s_lo, s_hi), (e_lo, e_hi) = cut_windows(transcript, start, end)
+            start = quietest_point(video, s_lo, s_hi, default=start)
+            end = quietest_point(video, e_lo, e_hi, default=end)
         duration = end - start
         print(f"[3/4] Clip {i}/{len(selection.clips)}: \"{clip.title}\" "
               f"({start:.0f}s-{end:.0f}s, {duration:.0f}s, score {clip.score})")
@@ -334,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
             "file": out_name,
             "title": clip.title,
             "hook": clip.hook,
+            "ending": clip.ending,
             "start": round(start, 2),
             "end": round(end, 2),
             "score": clip.score,

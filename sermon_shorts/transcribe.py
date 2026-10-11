@@ -157,12 +157,50 @@ def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
             if w["start"] >= start - 0.05 and w["start"] < end - 0.05]
 
 
+_QUOTE_WORDS = 4         # words of a quote that must match in sequence
+_QUOTE_SEARCH = 30.0     # seconds around Claude's timestamp to look for the quote
+
+
+def _norm(word: str) -> str:
+    return "".join(ch for ch in word.lower() if ch.isalnum() or ch == "'")
+
+
+def locate_quote(transcript: dict, quote: str, near: float, closing: bool = False) -> float | None:
+    """Where a clip's quoted opening (or closing) words are actually spoken.
+
+    Claude returns start/end times *and* the verbatim words a clip opens and
+    closes on, and on a sparsely punctuated transcript the times are the
+    weaker of the two: on the 2026-10-11 service one clip's hook was
+    "Because naturally..." while its start sat 5 s earlier, mid-sentence, and
+    another ended on "...but the spirit" because the transcript line broke
+    there. So find the words instead — the first few of an opening quote or
+    the last few of a closing one, at the occurrence closest to `near` — and
+    return the start of the first word (opening) or the end of the last word
+    (closing). None when the words can't be found nearby.
+    """
+    tokens_q = [w for w in (_norm(t) for t in quote.split()) if w]
+    target = tokens_q[-_QUOTE_WORDS:] if closing else tokens_q[:_QUOTE_WORDS]
+    if not target:
+        return None
+    words = [w for w in _all_words(transcript) if abs(w["start"] - near) <= _QUOTE_SEARCH + 10]
+    tokens = [_norm(w["word"]) for w in words]
+    n = len(target)
+    best = None
+    for i in range(len(words) - n + 1):
+        if tokens[i:i + n] != target:
+            continue
+        t = words[i + n - 1]["end"] if closing else words[i]["start"]
+        if abs(t - near) <= _QUOTE_SEARCH and (best is None or abs(t - near) < abs(best - near)):
+            best = t
+    return best
+
+
 # Snapping tunables. The end is rounded *forward* to the next real sentence
 # end (never backward) so a clip never stops mid-sentence; the small tail pad
 # keeps a slightly-early whisper word-end timestamp from clipping the last word
 # or the speaker's closing breath.
 _SENTENCE_END_CHARS = ".!?…"
-_END_PAD = 0.4          # seconds of breathing room added after the final word
+_END_PAD = END_PAD = 0.4   # seconds of breathing room added after the final word
 _MAX_END_DRIFT = 6.0    # don't extend past this to reach the next sentence end
 _MAX_START_DRIFT = 15.0  # don't rewind past this to reach a sentence start
 _SNAP_TOLERANCE = 0.5   # slack when deciding a boundary is "at" the requested bound
