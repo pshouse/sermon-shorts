@@ -8,6 +8,9 @@ like CapCut's "long video to shorts," but built for church services.
 *Left: the full service recording. Right: the same moment in the finished
 clip — auto-cropped to the speaker, captions burned in.*
 
+**Watch it being built:** [Sermon Shorts in the cloud: Jev + Claude Code + Fly.io Sprites](https://youtu.be/Bb60gg05D3w)
+(22-minute highlights of the live stream that moved this pipeline onto a Fly.io Sprite)
+
 Give it the Sunday service MP4 and it will:
 
 1. **Transcribe** the whole service locally with Whisper (word-level timestamps)
