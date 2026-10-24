@@ -1,8 +1,9 @@
 # API and CLI layer: design
 
 Status: proposal (2026-10-24). Built so far: step 0 (accounts, roles, the
-audit log) and step 1 (services, candidates, clip fingerprints and runs are
-recorded; `sermon-shorts services` and `sermon-shorts runs` read them).
+audit log), step 1 (services, candidates, clip fingerprints and runs are
+recorded) and step 2 (decisions, notes, posts, the approval gate in
+`publish`). Next: step 3, the HTTP API.
 
 ## Goal
 
@@ -97,8 +98,8 @@ Data root: `SERMON_SHORTS_DATA` (default `~/Downloads`, as now).
   candidates                       BUILT  every candidate: verdict, scores, note, outcome
   clips                            BUILT  mirrors clips.json + fingerprint
   runs, run_events                 BUILT  kind, args, starter, status, step timings
-  decisions                        NEW  approve/reject with fingerprint and note
-  posts                            NEW  mirrors published.json + who, manual, cover state
+  decisions, notes                 BUILT  approve/reject with fingerprint; reviewer notes
+  posts                            BUILT  mirrors published.json + who, manual, cover state
 ```
 
 `clips.json` and `published.json` keep being written exactly as now, because
@@ -310,14 +311,15 @@ which picks the newest. Today's `publish` already behaves this way.
 | Command | Does |
 |---|---|
 | `sermon-shorts <video> ...`, `--weekly`, `--sermon-only`, `--from-manifest` | unchanged, but each now records the run, its events, the service, its candidates and clip fingerprints |
-| `sermon-shorts services [list]` | services, newest first, with clip and candidate counts and the last run's status (built; approval/post counts and "needs you" come in step 2) |
-| `sermon-shorts services show [SERVICE]` | one service: sermon window, summary, clips with fingerprints, every candidate with its outcome and Claude's note (built; decisions and posts in step 2) |
+| `sermon-shorts services [list]` | services, newest first, with clip and candidate counts and the last run's status and how many items need someone (built) |
+| `sermon-shorts services show [SERVICE]` | one service: sermon window, summary, clips with fingerprints, every candidate with its outcome and Claude's note, each clip's decision, posts, cover state and notes, and the "needs you" list (built) |
 | `sermon-shorts services import FOLDER [--title --speaker --date]` | record a clips folder made before the database (built) |
-| `sermon-shorts approve [SERVICE] N... [--note TEXT]` | record approvals for the clips' current fingerprints |
-| `sermon-shorts reject [SERVICE] N --note TEXT` | record a rejection |
-| `sermon-shorts publish [SERVICE] N... [--to ...] [--dry-run] [--yes]` | as today, plus rule 1: unapproved or stale clips are listed as skipped. `--approve` records the approvals in the same step, for the one-person case, and logs them as such |
-| `sermon-shorts mark-posted [SERVICE] N instagram --url URL` | record a manual post |
-| `sermon-shorts retry-cover [SERVICE] N` | retry the YouTube cover |
+| `sermon-shorts approve [SERVICE] N... [--note TEXT] [--backfilled-from WHEN]` | record approvals of the clips as they are on disk (built) |
+| `sermon-shorts reject [SERVICE] N --note TEXT` | record a rejection; the reason is required (built) |
+| `sermon-shorts note [SERVICE] N TEXT` | a reviewer's note; decides nothing (built) |
+| `sermon-shorts publish [SERVICE] N... [--to ...] [--dry-run] [--yes] [--as L] [--approve]` | as before, plus rule 1: unapproved or stale clips are listed as skipped. Needs a named approver or owner except with `--dry-run`. `--approve` records approvals once the post is confirmed, for the one-person case (built) |
+| `sermon-shorts mark-posted [SERVICE] N PLATFORM --url URL` | record a post made by hand (built) |
+| `sermon-shorts retry-cover [SERVICE] N` | retry the YouTube cover (built) |
 | `sermon-shorts runs [list]` / `runs show [ID]` | run history; one run's steps with timings (built) |
 | `sermon-shorts audit [--service S] [--csv] [--verify]` | read, export or verify the log |
 | `sermon-shorts users init / invite / invites / revoke-invite / accept / list / role / remove / token / tokens / revoke-token` | people, roles and tokens (built) |
@@ -328,8 +330,9 @@ body. The UI and scripts can then rely on one schema, and the CLI doubles as
 a test harness for the API.
 
 The publish change is the one behaviour change: `publish 1 2` on a clip
-nobody approved now skips it and says why. On the sprite that becomes
-`publish 1 2 --yes --approve`, or an `approve` step before it.
+nobody approved now skips it and says why, and posting needs a named person.
+On the sprite that becomes `publish 1 2 --yes --as pshouse --approve`, or an
+`approve` step before it.
 
 ## Progress events
 
@@ -373,12 +376,15 @@ durations come straight from these.
    workflow passes its run id and who started it, and `sprite_weekly.sh`
    prints the audit tail hash into the Actions log.
    `services import` brings in older folders such as Oct 18's.
-2. **Decisions and the approval gate.** `approve`, `reject`, `mark-posted`,
-   `retry-cover`, the `decisions` and `posts` tables, and rule 1 in
-   `publish`. Backfill the Oct 18 approvals as `clip.approved` with
-   `"backfilled": true` and the publish time from `published.json`, because
-   the real approval time was never recorded. After this step the CLI alone
-   is auditable.
+2. **Decisions and the approval gate (built).** `approve`, `reject`, `note`,
+   `mark-posted`, `retry-cover`; the `decisions`, `notes` and `posts` tables
+   (decisions and notes append-only); rule 1 in `publish`, which now needs a
+   named approver or owner and records who posted and whether each cover
+   took. Importing a folder also imports its `published.json` posts (by an
+   unknown person). Approvals given before they could be recorded go in with
+   `approve --backfilled-from WHEN`. The CLI alone is now auditable.
+   Not built: `require_two_people`, and the publish plan id (that belongs
+   to the API, step 3).
 3. **HTTP API.** `serve`, tokens, the Caddy proxy, GitHub run merging,
    the event stream.
 4. **UI.** Wire the Studio screens to `/api/v1`.

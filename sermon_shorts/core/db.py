@@ -17,7 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_ENV = "SERMON_SHORTS_DB"
 DB_NAME = "sermon_shorts.db"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE users (
@@ -161,7 +161,59 @@ CREATE TABLE clips (
 );
 """
 
-MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2}
+# v3: people's decisions about clips, and what was posted where.
+_SCHEMA_V3 = """
+CREATE TABLE decisions (
+    id              INTEGER PRIMARY KEY,
+    service_id      TEXT NOT NULL REFERENCES services(id),
+    file            TEXT NOT NULL,
+    decision        TEXT NOT NULL CHECK (decision IN ('approve', 'reject')),
+    fingerprint     TEXT NOT NULL,     -- exactly what was approved (records.fingerprint)
+    note            TEXT NOT NULL DEFAULT '',
+    by_login        TEXT NOT NULL,
+    via             TEXT NOT NULL,
+    at              TEXT NOT NULL,
+    backfilled_from TEXT               -- when recorded after the fact: when it really happened
+);
+CREATE INDEX decisions_clip ON decisions(service_id, file, id);
+
+CREATE TABLE notes (
+    id         INTEGER PRIMARY KEY,
+    service_id TEXT NOT NULL REFERENCES services(id),
+    file       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    by_login   TEXT NOT NULL,
+    via        TEXT NOT NULL,
+    at         TEXT NOT NULL
+);
+
+-- Decisions and notes are history: a new decision supersedes, nothing is edited.
+CREATE TRIGGER decisions_no_update BEFORE UPDATE ON decisions
+    BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER decisions_no_delete BEFORE DELETE ON decisions
+    BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER notes_no_update BEFORE UPDATE ON notes
+    BEGIN SELECT RAISE(ABORT, 'notes are append-only'); END;
+CREATE TRIGGER notes_no_delete BEFORE DELETE ON notes
+    BEGIN SELECT RAISE(ABORT, 'notes are append-only'); END;
+
+CREATE TABLE posts (
+    service_id  TEXT NOT NULL REFERENCES services(id),
+    file        TEXT NOT NULL,
+    platform    TEXT NOT NULL CHECK (platform IN ('youtube', 'instagram', 'facebook')),
+    post_id     TEXT,
+    url         TEXT,
+    at          TEXT NOT NULL,
+    by_login    TEXT,                  -- NULL for posts imported from before accounts
+    via         TEXT NOT NULL,         -- 'cli', 'web', 'manual' or 'import'
+    manual      INTEGER NOT NULL DEFAULT 0,
+    cover       TEXT,                  -- 'set', 'failed', or NULL (none attempted / unknown)
+    fingerprint TEXT,                  -- the version that was posted
+    PRIMARY KEY (service_id, file, platform)  -- the no-double-posting rule
+);
+"""
+
+MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3}
 
 
 def db_path() -> Path:

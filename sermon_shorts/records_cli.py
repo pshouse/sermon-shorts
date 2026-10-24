@@ -14,7 +14,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .core import records, runs, users
+from .core import posts, records, review, runs, users
 from .core.audit import Actor
 from .core.db import connect
 
@@ -54,6 +54,16 @@ def _resolve_service(conn, ref: str | None) -> str:
     return sid
 
 
+def _folder(service: dict) -> Path | None:
+    folder = Path(service["clips_dir"]) if service.get("clips_dir") else None
+    return folder if folder and (folder / "clips.json").exists() else None
+
+
+def _needs_you(conn, service: dict) -> list[dict]:
+    folder = _folder(service)
+    return posts.needs_you(conn, service["id"], folder) if folder else []
+
+
 def services_main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="sermon-shorts services",
                                 description="Services (one per recording) and their clips.")
@@ -81,18 +91,31 @@ def services_main(argv: list[str]) -> int:
             print("No services recorded yet. Clip runs record them from now on; "
                   "older folders: sermon-shorts services import <clips folder>")
         for r in [] if getattr(args, "json", False) else rows:
+            open_items = len(_needs_you(conn, r))
             print(f"  {r['date'] or '----------'}  {r['id']:<28} {r['clip_count']} clip(s), "
-                  f"{r['candidate_count']} candidate(s)  last run: {r['last_run_status'] or '-'}"
-                  f"  {r['title'] or ''}")
+                  f"{r['candidate_count']} candidate(s), "
+                  f"{open_items or 'nothing'} needing you  last run: "
+                  f"{r['last_run_status'] or '-'}  {r['title'] or ''}")
         return 0
 
     if args.cmd == "show":
         sid = _resolve_service(conn, args.service)
         service = records.get_service(conn, sid)
         clips, cands = records.clips(conn, sid), records.candidates(conn, sid)
+        folder = _folder(service)
+        posted = posts.posts_for(conn, sid)
+        for c in clips:
+            fp = (records.manifest_fingerprint(folder, {"file": c["file"], "title": c["title"],
+                                                         "description": c["description"]})
+                  if folder and (folder / c["file"]).exists() else c["fingerprint"])
+            state, d = review.status(conn, sid, c["file"], fp)
+            c.update(review_state=state, review=review.describe(state, d),
+                     posts=posted.get(c["file"], {}),
+                     history=review.history(conn, sid, c["file"]))
+        todo = _needs_you(conn, service)
         if args.json:
-            print(json.dumps({**service, "clips": clips, "candidates": cands},
-                             indent=2, ensure_ascii=False))
+            print(json.dumps({**service, "clips": clips, "candidates": cands,
+                              "needs_you": todo}, indent=2, ensure_ascii=False))
             return 0
         print(f"{service['title'] or sid}  ({sid})")
         print(f"  {service['date'] or 'no date'}" + (f", {service['speaker']}" if service['speaker'] else ""))
@@ -101,10 +124,22 @@ def services_main(argv: list[str]) -> int:
                   f" ({service['labeler']}) {service['sermon_title'] or ''}")
         if service["summary"]:
             print(f"  summary: {service['summary']}")
+        if todo:
+            print(f"\n  Needs you ({len(todo)}):")
+            for t in todo:
+                print(f"    - {t['text']}")
         print(f"\n  Clips ({len(clips)}):")
         for c in clips:
             print(f"    {c['n']}. {c['title']}  ({c['end_s'] - c['start_s']:.0f}s, "
                   f"fingerprint {c['fingerprint'][:12]})  {c['file']}")
+            print(f"       {c['review']}")
+            for platform, p in sorted(c["posts"].items()):
+                how = ("by hand" if p["manual"] else f"by {p['by_login']}" if p["by_login"]
+                       else "before accounts")
+                cover = {"failed": ", cover NOT set", "set": ", cover set"}.get(p["cover"], "")
+                print(f"       {platform}: {p['url']} ({how}, {_when(p['at'])}{cover})")
+            for h in (h for h in c["history"] if h["kind"] == "note"):
+                print(f"       note from {h['by_login']}: {h['text']}")
         print(f"\n  Candidates ({len(cands)}):")
         if not cands:
             print("    none recorded (the run predates candidate recording)")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -165,8 +166,9 @@ def import_folder(conn: sqlite3.Connection, actor: Actor, folder: Path,
                   date: str | None = None) -> tuple[str, int]:
     """Bring a clips folder made before the database existed into it: the
     service, its clips with fresh fingerprints (also written into clips.json)
-    and the sermon window if one was recorded. Candidates from back then were
-    never saved, so there are none to import. Returns (service id, clips)."""
+    the sermon window if one was recorded, and the posts in published.json.
+    Candidates from back then were never saved, so there are none to import.
+    Safe to run again. Returns (service id, clips)."""
     from .db import write
 
     manifest_path = folder / "clips.json"
@@ -209,4 +211,56 @@ def import_folder(conn: sqlite3.Connection, actor: Actor, folder: Path,
     # After the commit, so a failed import leaves clips.json as it was.
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False),
                              encoding="utf-8")
+    from .posts import import_ledger  # posts imports this module
+    import_ledger(conn, actor, service_id, folder)
     return service_id, len(manifest["clips"])
+
+
+# --- finding a clips folder -------------------------------------------------
+
+DATA_ENV = "SERMON_SHORTS_DATA"
+
+
+def data_root() -> Path:
+    return Path(os.environ.get(DATA_ENV) or Path.home() / "Downloads").expanduser()
+
+
+def newest_clips_folder() -> Path | None:
+    """The most recently written *_clips folder: publish's long-standing default,
+    shared so approve and publish always pick the same folder."""
+    manifests = sorted(data_root().glob("*_clips/clips.json"), key=lambda p: p.stat().st_mtime)
+    return manifests[-1].parent if manifests else None
+
+
+def resolve_folder(conn: sqlite3.Connection, ref: str | None) -> Path:
+    """A clips folder from a path, a service id, or nothing (the newest)."""
+    if ref is None:
+        folder = newest_clips_folder()
+        if folder is None:
+            raise FileNotFoundError(f"no *_clips folder in {data_root()}; name one")
+        return folder
+    path = Path(ref).expanduser()
+    if (path / "clips.json").exists():
+        return path.resolve()
+    service = get_service(conn, ref)
+    if service and service["clips_dir"] and (Path(service["clips_dir"]) / "clips.json").exists():
+        return Path(service["clips_dir"])
+    raise FileNotFoundError(f"{ref!r} is neither a clips folder nor a service with one")
+
+
+def load_manifest(folder: Path) -> list[dict]:
+    return json.loads((folder / "clips.json").read_text(encoding="utf-8"))["clips"]
+
+
+def ensure_service(conn: sqlite3.Connection, actor: Actor, folder: Path) -> str:
+    """The folder's service id, importing the folder first if the database has
+    never seen it (folders made before it existed, or on another machine), and
+    picking up any published.json posts the database doesn't have yet."""
+    from .posts import import_ledger  # posts imports this module
+
+    service_id = service_id_for(folder)
+    if get_service(conn, service_id) is None:
+        import_folder(conn, actor, folder)
+    else:
+        import_ledger(conn, actor, service_id, folder)
+    return service_id

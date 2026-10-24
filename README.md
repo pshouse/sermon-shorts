@@ -195,15 +195,22 @@ and the YouTube files onto the sprite with `sprite file push` — they never
 go in git. Publish from there the same way:
 
 ```
-sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts publish 1 3'
+sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts approve 1 3 --as pshouse'
+sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts publish 1 3 --yes --as pshouse'
 ```
+
+(`sprite exec` gives no terminal to answer the confirmation prompt, so
+`publish` there always needs `--yes`; check with `--dry-run` first.)
 
 ## Publishing
 
 Nothing is posted automatically — the weekly run only renders clips. Watch
-them, then post the ones you approve by number:
+them, approve the ones that should go out (an approver or owner; see
+[People and roles](#people-and-roles)), then post them by number:
 
 ```
+export SERMON_SHORTS_USER=pshouse            # or --as pshouse on each command
+python -m sermon_shorts approve "~/Downloads/Kings and Kingdoms_sermon_clips" 1 3
 python -m sermon_shorts publish "~/Downloads/Kings and Kingdoms_sermon_clips" 1 3
 ```
 
@@ -212,14 +219,33 @@ Leave the folder off to use the newest `*_clips` folder in `~/Downloads`
 out and confirm with `y`; clips post **publicly, right away** to YouTube
 Shorts, Instagram Reels and Facebook Reels, using the title, description and
 cover image already generated. Each post is recorded in the folder's
-`published.json`, so running the same command again never double-posts.
+`published.json` and the database, so running the same command again never
+double-posts.
+
+An approval covers the clip **exactly as it is on disk**: video, cover,
+title and description. If any of them changes afterwards (a re-render, an
+edited description), `publish` skips the clip until someone approves it
+again. A clip nobody approved is skipped with the reason. When one person
+does both, `publish --approve` records the approval and posts in one step.
 
 | Flag | Meaning |
 |---|---|
 | `--to youtube instagram facebook` | post only to these (default: every connected platform) |
-| `--dry-run` | show what would be posted, post nothing |
+| `--dry-run` | show what would be posted, post nothing (no name needed) |
 | `--yes` | skip the confirmation prompt |
+| `--as LOGIN` | who is posting (default: `$SERMON_SHORTS_USER`) |
+| `--approve` | also approve the named clips that aren't yet, once you confirm |
 | `--connect youtube` / `--connect meta` | one-time account setup (below) |
+
+Reviewing and following up:
+
+```
+python -m sermon_shorts note 2 "The verse on screen is wrong"        # anyone: a note, no decision
+python -m sermon_shorts reject 2 --note "Wrong verse reference"       # approvers: a reason is required
+python -m sermon_shorts mark-posted 1 instagram --url https://...     # record a post made in the app
+python -m sermon_shorts retry-cover 2                                 # YouTube cover failed: try again
+python -m sermon_shorts services show                                 # status, posts and what needs you
+```
 
 ### One-time setup: YouTube
 

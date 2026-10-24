@@ -34,7 +34,7 @@ There is no linter or build step. `python -m unittest discover tests` runs the u
 5. **`captions.py`**: writes an ASS subtitle file (2–3 word pop chunks). `render.py` references it by bare filename with ffmpeg's cwd set to the temp dir, which avoids Windows path escaping in the subtitles filter.
 6. **`thumbnail.py`**: picks a frame from the speaker track and renders a caption-free cover `.jpg` with the title.
 7. **`subsplash.py`**: anonymous guest-token fetch of the newest recording from a church's public Subsplash feed (`--latest` / `--weekly`).
-8. **`publish.py`**: a separate subcommand, dispatched from the top of `cli.main()` when `argv[0] == "publish"` so it can never ride along with a render run. It records every post in the clips folder's `published.json`, and that ledger is what prevents double-posting.
+8. **`publish.py`**: a separate subcommand, dispatched from the top of `cli.main()` when `argv[0] == "publish"` so it can never ride along with a render run. It posts only what `core/posts.plan()` allows: clips whose latest decision (`core/review.py`) approves their current fingerprint, never twice, Instagram only up to `IG_MAX_SECONDS`. It needs a named person (`--as`/`SERMON_SHORTS_USER`, approver or above) except for `--dry-run`, and records every post in the clips folder's `published.json` and the `posts` table. `approve`/`reject`/`note`/`mark-posted`/`retry-cover` live in `review_cli.py`.
 
 Key cross-cutting facts:
 - **All clip times are seconds in the source video passed to that run.** `--sermon-only` writes a re-based transcript cache for the trimmed `_sermon.mp4` (`save_shifted_transcript`) so the next clips run skips transcription. `--weekly` simply recurses into `main()` twice (sermon trim, then clips on the sermon file).

@@ -68,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("users", "audit"):
         from .accounts_cli import users_main, audit_main
         return (users_main if argv[0] == "users" else audit_main)(argv[1:])
+    if argv and argv[0] in ("approve", "reject", "note", "mark-posted", "retry-cover"):
+        from .review_cli import main as review_main
+        return review_main(argv[0], argv[1:])
     if argv and argv[0] in ("services", "runs"):
         from .records_cli import services_main, runs_main
         return (services_main if argv[0] == "services" else runs_main)(argv[1:])
