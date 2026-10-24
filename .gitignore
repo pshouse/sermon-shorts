@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 youtube_client_secret.json
 .youtube_token.json
+sermon_shorts.db
+sermon_shorts.db-*

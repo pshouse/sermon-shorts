@@ -65,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "publish":
         from .publish import main as publish_main
         return publish_main(argv[1:])
+    if argv and argv[0] in ("users", "audit"):
+        from .accounts_cli import users_main, audit_main
+        return (users_main if argv[0] == "users" else audit_main)(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="sermon-shorts",

@@ -277,6 +277,43 @@ Instagram's API also rejects Reels longer than about 65 seconds (an opaque
 `ProcessingFailedError`, regardless of file size). `publish` skips Instagram
 for longer clips and says so — post those from the Instagram app.
 
+## People and roles
+
+The review web app (in progress, see `docs/api-design.md`) needs to know who
+is approving and posting. Accounts and the audit log live in
+`sermon_shorts.db` in the project folder (gitignored).
+
+Roles escalate: a **reviewer** can see everything and leave notes, an
+**approver** can also approve, reject and publish clips, and an **owner**
+can also start runs and manage people.
+
+Once, on the machine that runs the service, create the root owner:
+
+```
+python -m sermon_shorts users init --login pshouse --name "Patrick S."
+export SERMON_SHORTS_USER=pshouse      # who you act as from now on
+```
+
+It prints an API token once; keep it in a password manager. Then invite
+people (owners only) and send each one their code privately:
+
+```
+python -m sermon_shorts users invite approver --note "Sarah, comms team"
+python -m sermon_shorts users accept <code> --login sarah --name "Sarah K."   # they run this
+python -m sermon_shorts users list
+python -m sermon_shorts users role sarah owner     # promote / demote
+python -m sermon_shorts users remove sarah         # also revokes their tokens
+```
+
+The root owner is always an owner and can't be removed. Every change is in
+the audit log, which can't be edited:
+
+```
+python -m sermon_shorts audit                # newest 50 events
+python -m sermon_shorts audit --csv --limit 0 > audit.csv
+python -m sermon_shorts audit --verify       # check nothing was altered
+```
+
 ## Notes
 
 - **First run downloads the Whisper model** (~500 MB for `small`) — after that it

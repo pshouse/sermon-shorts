@@ -19,7 +19,7 @@ python -m sermon_shorts <video.mp4> --from-manifest --only 2   # re-render one c
 python -m sermon_shorts publish [<clips folder>] 1 3 --dry-run # preview what would be posted
 ```
 
-There is no test suite, linter, or build step. To check a change, run the pipeline on a real recording: `--whisper-model tiny` makes a quick transcription pass, and once a transcript is cached, `--from-manifest --only N` re-renders a single clip (reframe, captions, audio, thumbnail) without spending a Claude call. Use `publish --dry-run` when touching `publish.py`. Without `--dry-run`, `publish` posts **publicly and immediately**, so never run it to test.
+There is no linter or build step. `python -m unittest discover tests` runs the unit tests (standard library only; they cover `sermon_shorts/core/`). To check a pipeline change, run the pipeline on a real recording: `--whisper-model tiny` makes a quick transcription pass, and once a transcript is cached, `--from-manifest --only N` re-renders a single clip (reframe, captions, audio, thumbnail) without spending a Claude call. Use `publish --dry-run` when touching `publish.py`. Without `--dry-run`, `publish` posts **publicly and immediately**, so never run it to test.
 
 ## Architecture
 
@@ -43,6 +43,7 @@ Key cross-cutting facts:
 - **Config and secrets** all sit in the project root and are gitignored: `.env` (`ANTHROPIC_API_KEY`, `META_*`; `publish --connect meta` writes into it), `church.json` (church_name, speaker, footer, subsplash), `youtube_client_secret.json`, `.youtube_token.json`. `church.json` is looked up in the cwd first, then the project root.
 - Heavy or optional dependencies (faster_whisper, anthropic, httpx, Google client) are imported inside functions so that unrelated modes stay fast and still work when an optional dependency is missing.
 - The Claude model ID is the `MODEL` constant in `highlights.py`. `--from-manifest` reuses the saved cut times exactly: it does no re-snapping and no quote lookup.
+- **Accounts and audit** (`sermon_shorts/core/`, standard library only): SQLite store `sermon_shorts.db` in the project root (gitignored, `SERMON_SHORTS_DB` overrides; never under `~/Downloads`, which the sprite's file server publishes). Roles escalate reviewer < approver < owner via the `PERMISSIONS` table in `users.py`; `users init` creates the undeletable root owner once, then owners invite. Every state change writes its `audit.record()` event inside the same `db.write()` transaction; the audit table is append-only (triggers) and hash-chained (`audit --verify`). Secrets are stored as SHA-256 and never logged. `users`/`audit` are dispatched in `__main__.py` before the pipeline imports. `docs/api-design.md` is the plan for the rest of the API/CLI layer.
 - `scripts/weekly_cron.sh` is the macOS launchd entry point: it polls Subsplash on Sunday afternoons, logs to `~/Library/Logs/sermon-shorts.log`, sends a notification, and shuts down an idle Mac. It parses the CLI's `Latest service` and `clip(s) rendered` output lines, so keep those strings stable.
 
 ## Cloud (Fly.io sprite)

@@ -1,6 +1,7 @@
 # API and CLI layer: design
 
-Status: proposal (2026-10-24). Nothing here is built yet.
+Status: proposal (2026-10-24). Built so far: step 0, accounts, roles and the audit log
+(`sermon_shorts/core/`, `sermon-shorts users`, `sermon-shorts audit`).
 
 ## Goal
 
@@ -57,10 +58,14 @@ that before any server exists.
   CLI and the HTTP API are thin wrappers over it, so they cannot disagree on
   the rules. Today's `cli.main()` and `publish.main()` move their logic
   behind it without changing their flags or output.
-- **Files stay the source of truth.** The project already keeps everything as
-  files next to the video, which makes `sprite file pull` and debugging easy.
-  Keep that: no database. New records are JSON/JSONL files in the same
-  folders. The audit log is the one append-only file.
+- **SQLite for records, files for media.** People, tokens, invites,
+  decisions, posts, runs and the audit log live in one SQLite database
+  (`sermon_shorts.db`, standard library `sqlite3`, WAL mode so the API reads
+  while the CLI writes). A change and its audit event commit in the same
+  transaction. Videos, covers and transcripts stay as files next to the
+  recording, as now. The database sits in the project root next to `.env`,
+  not in `~/Downloads`, because the `clips` file server publishes
+  `~/Downloads`.
 - **Caddy stays in front.** It already serves `~/Downloads` with byte-range
   support (iOS needs it). It gains one `reverse_proxy /api/* localhost:8000`
   line, so the UI and API share one origin and the sprite's single HTTP port.
@@ -82,15 +87,22 @@ Data root: `SERMON_SHORTS_DATA` (default `~/Downloads`, as now).
     clips.json          (existing; each clip gains "fingerprint")
     published.json      (existing; entries gain "by", "manual", "cover")
     01_...mp4 .jpg .txt (existing)
-    service.json        NEW  Subsplash metadata, sermon window, summary
-    candidates.json     NEW  every candidate with verdict, scores, note, outcome
-  runs/
-    <run id>/run.json   NEW  kind, args, who/what started it, status, step timings
-    <run id>/events.jsonl NEW  structured progress events
-    <run id>/log.txt    NEW  the human log (what weekly-*.log is today)
-  audit.jsonl           NEW  append-only, hash-chained, all services
-  users.json            NEW  (project root, gitignored) people, roles, token hashes
+  runs/<run id>.log     NEW  the human log (what weekly-*.log is today)
+
+<project root>/sermon_shorts.db   (gitignored; SERMON_SHORTS_DB overrides)
+  users, tokens, invites           BUILT  (step 0, below)
+  audit                            BUILT  append-only, hash-chained
+  services                         NEW  Subsplash metadata, sermon window, summary
+  candidates                       NEW  every candidate: verdict, scores, note, outcome
+  clips                            NEW  mirrors clips.json + fingerprint
+  decisions                        NEW  approve/reject with fingerprint and note
+  posts                            NEW  mirrors published.json + who, manual, cover state
+  runs, run_events                 NEW  kind, args, starter, status, step timings
 ```
+
+`clips.json` and `published.json` keep being written exactly as now, because
+`--from-manifest`, `publish` and `--weekly` idempotence read them. The
+database rows are written alongside them.
 
 ### Clip fingerprint
 
@@ -105,7 +117,7 @@ the Review screen states: "Re-rendering the clip clears it."
 ### Candidates
 
 `review_clips()` returns every review, not just the kept clips, and the
-caller writes `candidates.json`:
+caller writes them to the `candidates` table (shown here as JSON):
 
 ```json
 {"candidates": [
@@ -122,32 +134,30 @@ caller writes `candidates.json`:
 
 ### Audit log
 
-`audit.jsonl`, one event per line, never rewritten:
+The `audit` table (`sermon_shorts/core/audit.py`, built):
 
-```json
-{"seq": 41, "at": "2026-10-24T14:14:03Z", "actor": {"name": "Patrick S.", "via": "web"},
- "action": "clip.approved", "service": "Live_2026-10-18_7am",
- "clip": "01_be-ready-god-wants-to-use-you.mp4",
- "data": {"fingerprint": "9f2c...", "note": ""},
- "prev": "c0a1...", "hash": "77be..."}
-```
+| seq | at | actor | via | action | service | clip | data | prev | hash |
+|---|---|---|---|---|---|---|---|---|---|
+| 41 | 2026-10-24T14:14:03Z | pshouse | web | clip.approved | Live_2026-10-18_7am | 01_be-ready-...mp4 | `{"fingerprint":"9f2c...","note":""}` | c0a1... | 77be... |
 
-- `hash = sha256(prev + canonical JSON of the event without hash)`. Editing
-  or deleting a line breaks every hash after it, and `audit verify` reports
-  the first broken `seq`. This is tamper-evident, not tamper-proof: someone
-  with shell access could rewrite the whole file. The tail hash is printed
-  in each weekly run's log line and kept in the GitHub Actions log, which
-  gives an outside copy to check against.
-- Writes take an `fcntl` lock on `audit.jsonl.lock` so the API and a CLI
-  command running at the same time can't interleave.
-- Actions: `run.started`, `run.step`, `run.finished`, `run.failed`,
-  `sermon.found`, `clip.rendered`, `clip.approved`, `clip.rejected`,
-  `publish.planned`, `post.created`, `post.failed`, `post.skipped`,
-  `post.marked_manual`, `cover.failed`, `cover.set`, `user.added`,
-  `token.revoked`.
-- Every write that matters goes to the audit log **and** to its own file
-  (`published.json`, `clips.json`). The audit log is the history, and the
-  per-folder files are the current state the rest of the code already reads.
+- Three layers of protection. Triggers make the table refuse `UPDATE` and
+  `DELETE`. Each row's `hash` covers the previous row's hash, so a row
+  changed after dropping the triggers breaks the chain from there on. And
+  `AUTOINCREMENT`'s high-water mark shows rows cut off the end.
+  `sermon-shorts audit --verify` checks all three and prints the tail hash.
+- This makes tampering evident, not impossible: someone with shell access
+  could rebuild the whole chain. The weekly run prints the tail hash into
+  the GitHub Actions log, which keeps an outside copy to check against.
+- Writes use `BEGIN IMMEDIATE`, so two writers can't both append after the
+  same tail, and the state change commits together with its event.
+- Actions: `user.root_created`, `invite.created`, `invite.revoked`,
+  `user.joined`, `user.role_changed`, `user.removed`, `token.created`,
+  `token.revoked` (built); `run.started`, `run.finished`, `run.failed`,
+  `sermon.found`, `clip.rendered`, `clip.noted`, `clip.approved`,
+  `clip.rejected`, `publish.planned`, `post.created`, `post.failed`,
+  `post.skipped`, `post.marked_manual`, `cover.failed`, `cover.set` (to come).
+- Secrets never enter the log: events name token and invite *ids*, never
+  the token or code.
 
 ## Rules the core enforces
 
@@ -161,10 +171,11 @@ caller writes `candidates.json`:
    in between (a new approval, a re-render, a post already made from the
    CLI), the plan id no longer matches and execute returns `409`. This keeps
    today's "About to post PUBLICLY... [y/N]" guarantee for the browser.
-3. **No double posts.** `published.json` stays the ledger, checked inside
-   the same lock as the write.
-4. **One render run at a time.** A `runs/active` lock file; a second start
-   returns `409` with the active run's id. (The GitHub workflow's
+3. **No double posts.** A unique `(clip, platform)` key on the `posts` table,
+   checked in the same transaction as the write (and `published.json` still
+   updated for the existing CLI).
+4. **One render run at a time.** A partial unique index on `runs` where
+   `status = 'running'`; a second start returns `409` with the active run's id. (The GitHub workflow's
    concurrency group already does this for scheduled runs.)
 5. **Rejections need a note.** Approvals may have one.
 6. **Instagram over `IG_MAX_SECONDS`** is planned as `skipped: manual_required`
@@ -172,31 +183,50 @@ caller writes `candidates.json`:
 
 ## Identity and roles
 
-The sprite URL already needs Fly org auth, but that tells the app nothing
-about *which* person is calling. Each person gets an API token:
+Built in `sermon_shorts/core/users.py` (step 0).
 
-```json
-{"users": [
-  {"name": "Patrick S.", "login": "pshouse", "roles": ["admin"],
-   "tokens": [{"id": "t_8c1f", "sha256": "...", "created": "2026-10-24", "revoked": null}]}
-]}
-```
+The sprite URL already needs Fly org auth, but that tells the app nothing
+about *which* person is calling, so every person has an account with one
+role. Roles escalate, and each includes everything below it:
 
 | Role | Can |
 |---|---|
-| `viewer` | read everything, export the audit log |
-| `approver` | + approve/reject clips |
-| `publisher` | + plan/execute publishes, mark manual posts, retry covers |
-| `operator` | + start/cancel runs |
-| `admin` | all of the above + manage users and tokens |
+| `reviewer` | see everything (services, clips, runs, audit log), leave review notes |
+| `approver` | + approve/reject clips, publish, record manual posts, retry covers |
+| `owner` | + start/cancel runs, invite people, change roles, remove people, manage anyone's tokens |
 
-- The API takes `Authorization: Bearer <token>`. Only the sha256 is stored.
-  The browser UI keeps the token in an HttpOnly cookie set by a one-time
-  `/login?token=...` link from `users add`.
-- The CLI acts as `SERMON_SHORTS_USER` (a `login` from `users.json`), or
-  `--as <login>`. Approve, reject, publish and mark-posted refuse to run
-  without one. Shell access is already full trust, so the CLI does not ask
-  for a token; it records `"via": "cli"` so the log shows the difference.
+The table is `PERMISSIONS` in `users.py`. The CLI and the API both check
+against it.
+
+**Bootstrapping.** An admin with shell access on the sprite runs
+`sermon-shorts users init --login L --name N` once. It creates the **root
+owner** and that person's first API token, and only works on a database that
+has never had a user, so it can't later be used to add a second owner by the
+back door. The audit event is attributed to `admin:<shell user>`.
+
+**Invites.** From then on people join only by invite, and only owners
+invite. An owner can invite at any role, including owner.
+`users invite approver --note "Sarah, comms"` prints a one-time code that
+works for 7 days (1-30 with `--days`). Redeeming it (`users accept CODE
+--login --name`, later a web page) creates the account with the invite's
+role and its first token. Codes can be withdrawn while unused.
+
+**Changing people.** Owners promote and demote with `users role LOGIN ROLE`
+and remove with `users remove LOGIN`. Removing someone revokes their tokens
+but keeps their row, so audit entries still name a real person, and their
+login can't be reused. The **root account is always an owner and can't be
+demoted or removed**, by anyone, including other owners. That also means
+the service can never lose its last owner.
+
+**Tokens.** `ssk_...` bearer tokens, shown once, stored as SHA-256. Anyone
+can issue or revoke their own tokens; owners can do it for anyone.
+
+- The API takes `Authorization: Bearer <token>`. The browser UI will keep it
+  in an HttpOnly cookie set by a one-time login link.
+- The CLI acts as `SERMON_SHORTS_USER`, or `--as <login>`. Commands that
+  change something refuse to run without one. Shell access is already full
+  trust, so the CLI does not ask for a token; it records `via = "cli"` so
+  the log shows the difference.
 - Optional setting `"require_two_people": true` in `church.json`: the person
   who publishes a clip must not be the person who approved it. Off by
   default, since today one person does both.
@@ -215,7 +245,7 @@ through `GET /runs/{id}` or the event stream.
 | GET | `/me` | name, roles |
 | GET | `/services?limit=10` | newest first: id, title, date, speaker, counts, `needs_you` count |
 | GET | `/services/{sid}` | metadata, sermon window, summary, clips (with status, fingerprint, latest decision, posts), `needs_you` items, latest run |
-| GET | `/services/{sid}/candidates` | `candidates.json` |
+| GET | `/services/{sid}/candidates` | the service's candidates |
 | GET | `/services/{sid}/clips/{file}` | one clip, plus its audit events |
 | POST | `/services/{sid}/clips/{file}/decisions` | body `{"decision":"approve"\|"reject","note":"","fingerprint":"..."}`. `409 approval_stale` if the fingerprint isn't current (the clip changed while you watched it) |
 
@@ -244,8 +274,8 @@ so it needs no server-side storage and expires itself when anything moves.
 |---|---|---|
 | POST | `/runs` | body `{"kind": "weekly", "labeler": "claude", "force": false}` or `{"kind": "rerender", "service": sid, "clip": file}`. `202 {"run_id"}`; `409 run_active` |
 | GET | `/runs?limit=20` | sprite runs merged with GitHub Actions runs of `weekly.yml` (see below) |
-| GET | `/runs/{id}` | `run.json`: status, steps with durations, outcome |
-| GET | `/runs/{id}/events` | `events.jsonl`; with `Accept: text/event-stream`, a live stream for the progress view |
+| GET | `/runs/{id}` | the run: status, steps with durations, outcome |
+| GET | `/runs/{id}/events` | the run's progress events; with `Accept: text/event-stream`, a live stream for the progress view |
 | GET | `/runs/{id}/log` | `log.txt` as text |
 | POST | `/runs/{id}/cancel` | SIGTERM to the process group, `run.failed` with `reason: cancelled` |
 
@@ -253,7 +283,7 @@ so it needs no server-side storage and expires itself when anything moves.
 was missing), so the sprite has no record of them. `GET /runs` therefore
 also reads `weekly.yml` runs from the GitHub API, using a read-only
 `GITHUB_TOKEN` in `.env`, and joins them to sprite runs through
-`run.json.github_run_id`. The workflow passes the id as
+the run's `github_run_id`. The workflow passes the id as
 `SERMON_SHORTS_GITHUB_RUN=${{ github.run_id }}`. A GitHub run with no
 sprite run shows as "failed before reaching the sprite".
 
@@ -276,7 +306,7 @@ which picks the newest. Today's `publish` already behaves this way.
 
 | Command | Does |
 |---|---|
-| `sermon-shorts <video> ...`, `--weekly`, `--sermon-only`, `--from-manifest` | unchanged, but each now writes a run record, events, `service.json`, `candidates.json` and fingerprints |
+| `sermon-shorts <video> ...`, `--weekly`, `--sermon-only`, `--from-manifest` | unchanged, but each now records the run, its events, the service, its candidates and clip fingerprints |
 | `sermon-shorts services` | list services with clip/approval/post counts and "needs you" |
 | `sermon-shorts show [SERVICE]` | one service: clips, decisions, posts, needs-you items |
 | `sermon-shorts approve [SERVICE] N... [--note TEXT]` | record approvals for the clips' current fingerprints |
@@ -286,7 +316,7 @@ which picks the newest. Today's `publish` already behaves this way.
 | `sermon-shorts retry-cover [SERVICE] N` | retry the YouTube cover |
 | `sermon-shorts runs` / `runs show ID` / `runs log ID` | run history and logs |
 | `sermon-shorts audit [--service S] [--csv] [--verify]` | read, export or verify the log |
-| `sermon-shorts users add LOGIN --name NAME --role ROLE` / `users token LOGIN` / `users revoke TOKEN_ID` | manage people and tokens; prints a one-time login link |
+| `sermon-shorts users init / invite / invites / revoke-invite / accept / list / role / remove / token / tokens / revoke-token` | people, roles and tokens (built) |
 | `sermon-shorts serve [--port 8000]` | run the API (imports FastAPI/uvicorn lazily, as other optional deps are) |
 
 Every read command takes `--json`, which prints exactly the API's response
@@ -301,7 +331,7 @@ nobody approved now skips it and says why. On the sprite that becomes
 
 The pipeline's `print()` calls become `progress.emit(step, message, **data)`.
 The default sink prints the same text as today. When a run record is active,
-a second sink appends to `events.jsonl`:
+a second sink writes rows to `run_events`:
 
 ```json
 {"t": "2026-10-24T13:52:18Z", "step": "transcribe", "state": "done",
@@ -328,14 +358,16 @@ durations come straight from these.
 
 ## Build order
 
-1. **Record what's missing (CLI only, no server).** `core/store.py` and
-   `core/audit.py`, then `service.json`, `candidates.json`, fingerprints,
-   run records and progress events. Backfill the Oct 18 folder: its
+0. **Accounts and the audit log (built).** SQLite store, root owner,
+   invites, reviewer/approver/owner, tokens, hash-chained audit, tests in
+   `tests/` (`python -m unittest discover tests`).
+1. **Record what's missing (CLI only, no server).** Services, candidates,
+   fingerprints, run records and progress events. Backfill the Oct 18 folder: its
    approvals are logged as `clip.approved` with `"backfilled": true` and the
    publish time from `published.json`, because the real approval time was
    never recorded.
 2. **Decisions and the approval gate.** `approve`, `reject`, `show`,
-   `services`, `mark-posted`, `retry-cover`, `audit`, `users`, and rule 1 in
+   `services`, `mark-posted`, `retry-cover`, and rule 1 in
    `publish`. After this step the CLI alone is auditable.
 3. **HTTP API.** `serve`, tokens, the Caddy proxy, GitHub run merging,
    the event stream.
@@ -343,13 +375,15 @@ durations come straight from these.
 
 Each step is shippable by itself and is checked the way the repo checks
 things now: a `--whisper-model tiny` run, `--from-manifest --only N`, and
-`publish --dry-run`. Step 1 is also the right time to add the first tests
-(`core/` is pure file logic and easy to test without video).
+`publish --dry-run`. The `core/` layer gets unit tests in `tests/`
+(standard library `unittest`, no video needed), as step 0 did.
 
 ## Open questions
 
-1. **Who besides you approves or publishes?** This decides whether the roles
-   and `require_two_people` are needed now or can wait.
+1. **Should approvers publish, or only owners?** The current table lets
+   approvers publish; moving `publish` to owner is a one-line change in
+   `PERMISSIONS`. Related: is `require_two_people` (approver and publisher
+   must differ) wanted now, or later?
 2. **Should posting from the CLI without approval stay possible** (via
    `--approve`), or must every post go through a separate approve step?
 3. **Is a tamper-evident log enough**, or do you want each day's tail hash
