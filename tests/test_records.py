@@ -4,7 +4,6 @@ Run: python -m unittest discover tests (standard library only)."""
 import json
 import os
 import socket
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path

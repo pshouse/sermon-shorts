@@ -442,27 +442,39 @@ def main(argv: list[str]) -> int:
         # Re-plan from the recorded decisions: what goes out is what the gate allows.
         jobs, _ = posts.plan(conn, service_id, folder, chosen, platforms)
 
+    results = post_jobs(conn, actor, service_id, folder, jobs)
+    failed = sum(1 for r in results if r["error"])
+    print(f"\nDone — {len(jobs) - failed} posted, {failed} failed "
+          f"(record in {folder / LEDGER})")
+    return 1 if failed else 0
+
+
+def post_jobs(conn, actor: Actor, service_id: str, folder: Path, jobs: list[dict],
+              say=print) -> list[dict]:
+    """Post planned jobs (from posts.plan, already through the gate), recording
+    each one in published.json and the database as it goes. Shared by this
+    command and the web API. Returns one result per job."""
     ledger = posts.load_ledger(folder)
-    failed = 0
+    results = []
     for job in jobs:
         clip, platform = job["entry"], job["platform"]
         mp4 = folder / clip["file"]
         jpg = mp4.with_suffix(".jpg")
-        print(f"\n{platform}: {clip['title']}")
+        say(f"\n{platform}: {clip['title']}")
+        result = {"n": job["n"], "file": clip["file"], "title": clip["title"],
+                  "platform": platform, "url": None, "cover": None, "error": None}
         try:
             post_id, url, cover = PUBLISHERS[platform](clip, mp4, jpg if jpg.exists() else None)
         except PublishError as e:
-            failed += 1
-            print(f"    FAILED: {e}")
+            say(f"    FAILED: {e}")
             posts.record_failure(conn, actor, service_id, clip["file"], platform, str(e))
+            results.append({**result, "error": str(e)})
             continue
         posts.write_ledger_entry(folder, ledger, clip["file"], platform, {
             "id": post_id, "url": url, "at": datetime.now().isoformat(timespec="seconds"),
             "by": actor.login})
         posts.record_post(conn, actor, service_id, clip["file"], platform, post_id, url,
                           job["fingerprint"], cover=cover)
-        print(f"    posted: {url}")
-
-    print(f"\nDone — {len(jobs) - failed} posted, {failed} failed "
-          f"(record in {folder / LEDGER})")
-    return 1 if failed else 0
+        say(f"    posted: {url}")
+        results.append({**result, "url": url, "cover": cover})
+    return results

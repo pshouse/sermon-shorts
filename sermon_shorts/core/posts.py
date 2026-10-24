@@ -8,6 +8,7 @@ cover took, and records posts made by hand in the apps.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -86,6 +87,18 @@ def plan(conn: sqlite3.Connection, service_id: str, folder: Path, chosen: list[i
             else:
                 jobs.append({**base, "platform": platform})
     return jobs, skipped
+
+
+def plan_id(jobs: list[dict], skipped: list[dict]) -> str:
+    """An id for exactly this plan: the clips, platforms and versions that would
+    go out and everything skipped. Shown with the preview and required to post,
+    so if anything changes in between (an approval, a re-render, a post made
+    elsewhere) the id no longer matches and nothing is posted."""
+    key = json.dumps({
+        "jobs": sorted((j["n"], j["entry"]["file"], j["platform"], j["fingerprint"]) for j in jobs),
+        "skipped": sorted((s["n"], s["platform"] or "", s["kind"], s["reason"]) for s in skipped),
+    }, separators=(",", ":"))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
 
 
 # --- recording --------------------------------------------------------------

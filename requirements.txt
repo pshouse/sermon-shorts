@@ -10,3 +10,5 @@ httpx>=0.27  # Subsplash --latest fetch (already pulled in by anthropic)
 google-api-python-client>=2.100  # publish: YouTube upload
 google-auth-oauthlib>=1.2        # publish: one-time YouTube login
 typesafe-sdk>=0.7  # --labeler jev: sermon finding with TypeSafe's Jev
+fastapi>=0.115,<1  # serve: the review app's API
+uvicorn>=0.32     # serve

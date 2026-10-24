@@ -8,6 +8,9 @@ if len(sys.argv) > 1 and sys.argv[1] in ("users", "audit"):
 if len(sys.argv) > 1 and sys.argv[1] in ("approve", "reject", "note", "mark-posted", "retry-cover"):
     from .review_cli import main as review_main
     raise SystemExit(review_main(sys.argv[1], sys.argv[2:]))
+if len(sys.argv) > 1 and sys.argv[1] == "serve":
+    from .api import serve
+    raise SystemExit(serve(sys.argv[2:]))
 if len(sys.argv) > 1 and sys.argv[1] in ("services", "runs"):
     from .records_cli import services_main, runs_main
     raise SystemExit((services_main if sys.argv[1] == "services" else runs_main)(sys.argv[2:]))

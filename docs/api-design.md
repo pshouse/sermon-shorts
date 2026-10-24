@@ -2,8 +2,9 @@
 
 Status: proposal (2026-10-24). Built so far: step 0 (accounts, roles, the
 audit log), step 1 (services, candidates, clip fingerprints and runs are
-recorded) and step 2 (decisions, notes, posts, the approval gate in
-`publish`). Next: step 3, the HTTP API.
+recorded), step 2 (decisions, notes, posts, the approval gate in
+`publish`) and step 3 (the HTTP API, `sermon_shorts/api.py`). Next: step 4,
+wiring the Studio screens to it.
 
 ## Goal
 
@@ -237,10 +238,37 @@ can issue or revoke their own tokens; owners can do it for anyone.
 
 ## HTTP API
 
+Built in `sermon_shorts/api.py` (`python -m sermon_shorts serve`); the live
+endpoint list, with request and response shapes, is at `/api/docs`. What
+was built differs from the tables below in a few places, noted here:
+
+- **Signing in:** `POST /session {"token"}` sets an HttpOnly, SameSite=Strict
+  cookie (`DELETE /session` clears it); `Authorization: Bearer` also works.
+  Cookie-authenticated writes must send `X-Requested-With: sermon-shorts`
+  (a cross-site page can't add that header without a CORS preflight, which
+  the API never grants). No login-link tokens in URLs, which would end up
+  in logs.
+- **People:** `GET /users`, `POST /invites`, `GET /invites`,
+  `DELETE /invites/{id}`, `POST /invites/accept` (no token needed: it
+  returns the new token once and signs that browser in),
+  `PATCH /users/{login} {"role"}`, `DELETE /users/{login}`.
+- **Publishing is stateless:** the execute call repeats the preview's body
+  (`{"clips", "platforms", "plan_id"}`), the server re-plans and compares
+  ids. Posting runs in a thread; `GET /publish-jobs/{id}` follows it (kept
+  in memory; after a restart the service's posts are the record).
+- **Runs:** `GET /runs` returns `{"runs": [...], "github_only": [...]}`.
+  `POST /runs` spawns `scripts/sprite_weekly.sh` (on a sprite) with the
+  run id and the requesting person in its environment, so the pipeline
+  records itself under that id; a run still in its git pull / pip install
+  shows as `starting`. Cancel sends SIGTERM, which the pipeline records as
+  `cancelled`. Only `weekly` runs can be started from the API for now.
+- New audit actions: `publish.planned`, `run.requested`,
+  `run.cancel_requested`.
+
 Base `/api/v1`, JSON in and out. Errors are
 `{"error": {"code": "approval_stale", "message": "..."}}` with a 4xx status.
-Long jobs (runs, publishes) return `202` with a run id. Clients follow them
-through `GET /runs/{id}` or the event stream.
+Long jobs (runs, publishes) return `202` with an id. Clients follow them
+through `GET /runs/{id}`, `GET /publish-jobs/{id}` or the event stream.
 
 ### Services and clips
 
@@ -352,13 +380,21 @@ durations come straight from these.
 ## Running it on the sprite
 
 - `scripts/sprite_setup.sh` creates a second sprite service, `api`
-  (`.venv/bin/python -m sermon_shorts serve --port 8000`). It changes the
-  `clips` Caddy service to a small Caddyfile: `/api/*` goes to `:8000`,
-  everything else goes to the file server under `/files`.
+  (`python -m sermon_shorts serve`, localhost:8000), and runs the `clips`
+  service as Caddy with `scripts/Caddyfile`: `/api/*` goes to the API,
+  everything else to the file server at the same URLs as before (clip
+  `video_url`s are those paths). A sprite set up before this still has the
+  plain file server; the script says so and asks for it to be removed and
+  the script re-run. **Untested:** Caddy and `sprite-env` aren't available
+  where this was built, so the Caddyfile and the service commands still
+  need a first run on the sprite.
 - Runs started from the API go through `scripts/sprite_weekly.sh`, so they
   get the same task-hold heartbeat, `git pull`, `HF_HUB_OFFLINE=1` and log
-  file as the cron path. The script gains a `RUN_ID` env var for the run
-  record. Publish jobs take the same task hold while they run.
+  file as the cron path; `SERMON_SHORTS_RUN_ID` carries the id. Publish
+  jobs take a task hold of their own while they run.
+- Optional: `GITHUB_TOKEN` (read-only, Actions) and
+  `SERMON_SHORTS_GITHUB_REPO=pshouse/sermon-shorts` in `.env` turn on the
+  GitHub run merging.
 - To verify: the sprite pauses when idle. A request to the sprite URL
   appears to wake it, which the review file server already relies on, but
   that is worth confirming for the API service before the UI depends on it.
@@ -383,10 +419,14 @@ durations come straight from these.
    took. Importing a folder also imports its `published.json` posts (by an
    unknown person). Approvals given before they could be recorded go in with
    `approve --backfilled-from WHEN`. The CLI alone is now auditable.
-   Not built: `require_two_people`, and the publish plan id (that belongs
-   to the API, step 3).
-3. **HTTP API.** `serve`, tokens, the Caddy proxy, GitHub run merging,
-   the event stream.
+   Not built: `require_two_people`.
+3. **HTTP API (built).** `serve`, cookie or bearer sign-in, people and
+   invites, services and clips with media URLs and "needs you",
+   fingerprint-checked decisions, preview-then-post publishing with plan
+   ids, manual posts, cover retry, starting/following/cancelling runs (with
+   a live event stream), GitHub run merging, the audit log with CSV export
+   and verification, the Caddyfile and sprite services. API tests in
+   `tests/test_api.py` (skipped where FastAPI isn't installed).
 4. **UI.** Wire the Studio screens to `/api/v1`.
 
 Each step is shippable by itself and is checked the way the repo checks

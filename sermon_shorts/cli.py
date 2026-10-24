@@ -71,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("approve", "reject", "note", "mark-posted", "retry-cover"):
         from .review_cli import main as review_main
         return review_main(argv[0], argv[1:])
+    if argv and argv[0] == "serve":
+        from .api import serve
+        return serve(argv[1:])
     if argv and argv[0] in ("services", "runs"):
         from .records_cli import services_main, runs_main
         return (services_main if argv[0] == "services" else runs_main)(argv[1:])
@@ -80,6 +83,17 @@ def main(argv: list[str] | None = None) -> int:
     # exits. A nested call (--weekly's sermon and clips steps) joins it.
     from .core import runs
     owns = runs.current() is None
+    if owns:
+        # The web app cancels a run with SIGTERM; turn it into an exit the
+        # run can record, instead of dying with the run left open.
+        import signal
+
+        def _cancelled(signum, frame):
+            raise SystemExit("cancelled")
+        try:
+            signal.signal(signal.SIGTERM, _cancelled)
+        except ValueError:  # not the main thread (e.g. called from a test runner)
+            pass
     try:
         rc = _pipeline(argv)
     except SystemExit as e:

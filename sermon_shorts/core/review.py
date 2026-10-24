@@ -23,6 +23,10 @@ class ReviewError(Exception):
     pass
 
 
+class StaleError(ReviewError):
+    """The clip changed between being watched and being decided on."""
+
+
 def clip_at(folder: Path, n: int) -> dict:
     """Clip number n (1-based, as listed by publish and services show)."""
     clips = records.load_manifest(folder)
@@ -64,8 +68,12 @@ def describe(state: str, d: dict | None) -> str:
 
 
 def decide(conn: sqlite3.Connection, user: User, folder: Path, n: int, decision: str,
-           note: str = "", via: str = "cli", backfilled_from: str | None = None) -> dict:
-    """Approve or reject clip n as it is on disk now. Returns the decision."""
+           note: str = "", via: str = "cli", backfilled_from: str | None = None,
+           expected_fingerprint: str | None = None) -> dict:
+    """Approve or reject clip n as it is on disk now. Returns the decision.
+
+    `expected_fingerprint` is the version the person watched (the web app
+    sends it); if the clip has changed since, nothing is recorded."""
     if decision not in ("approve", "reject"):
         raise ValueError(decision)
     if not user.can("approve"):
@@ -77,6 +85,8 @@ def decide(conn: sqlite3.Connection, user: User, folder: Path, n: int, decision:
     service_id = records.ensure_service(conn, user.actor(via), folder)
     entry = clip_at(folder, n)
     fp = records.manifest_fingerprint(folder, entry)
+    if expected_fingerprint and expected_fingerprint != fp:
+        raise StaleError(f"{entry['title']} changed since you loaded it; watch it again")
     at = audit.now()
     with write(conn):
         cur = conn.execute(

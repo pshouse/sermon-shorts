@@ -42,14 +42,26 @@ def date_in(name: str) -> str | None:
 
 # --- fingerprints -----------------------------------------------------------
 
+# Hashing a clip reads the whole video (tens of MB), and the review app asks
+# for every clip's status on each page load; a changed file has a new size or
+# modification time, so those key the cache.
+_SHA_CACHE: dict[tuple, str] = {}
+
+
 def _file_sha(path: Path | None) -> str:
     if path is None or not path.exists():
         return hashlib.sha256(b"").hexdigest()
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    st = path.stat()
+    key = (str(path.resolve()), st.st_size, st.st_mtime_ns)
+    if key not in _SHA_CACHE:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if len(_SHA_CACHE) > 500:
+            _SHA_CACHE.clear()
+        _SHA_CACHE[key] = h.hexdigest()
+    return _SHA_CACHE[key]
 
 
 def fingerprint(mp4: Path, jpg: Path | None, title: str, description: str) -> str:

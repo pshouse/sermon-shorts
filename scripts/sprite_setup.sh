@@ -36,10 +36,23 @@ done
 mkdir -p "$HOME/Downloads" "$HOME/logs"
 chmod +x scripts/*.sh
 
-# Read-only review page for the rendered clips, behind the sprite URL's org
-# auth. Caddy rather than python -m http.server: iOS won't play an MP4
-# without byte-range support.
-sprite-env services list | grep -q '"name":"clips"' || sprite-env services create clips \
-    --cmd /usr/bin/caddy --args "file-server,--root,$HOME/Downloads,--browse,--listen,:8080" \
-    --http-port 8080 --no-stream
+# The review app's API (python -m sermon_shorts serve), on localhost only:
+# Caddy below is the only thing that reaches it.
+sprite-env services list | grep -q '"name":"api"' || sprite-env services create api \
+    --cmd /bin/bash --args "-lc,cd $DIR && exec .venv/bin/python -m sermon_shorts serve" \
+    --no-stream
+
+# The sprite URL (org auth) -> Caddy on :8080: /api/* to the API, everything
+# else the rendered clips, read-only. Caddy rather than python -m http.server:
+# iOS won't play an MP4 without byte-range support. The config is
+# scripts/Caddyfile, so a git pull plus a service restart picks up changes.
+if ! sprite-env services list | grep -q '"name":"clips"'; then
+    sprite-env services create clips \
+        --cmd /usr/bin/caddy --args "run,--config,$DIR/scripts/Caddyfile,--adapter,caddyfile" \
+        --http-port 8080 --no-stream
+elif ! sprite-env services list | grep -q 'Caddyfile'; then
+    # Sprites made before the API ran a bare file server with no /api route.
+    echo "NOTE: the 'clips' service is the old plain file server, so /api/* isn't routed."
+    echo "      Remove it (see: sprite-env services --help) and re-run this script."
+fi
 echo "sprite ready"

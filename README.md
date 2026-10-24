@@ -355,6 +355,16 @@ python -m sermon_shorts services import "~/Downloads/Live_2026-10-18_7am_sermon_
 Only one run can happen at a time; a second one stops with "Not started" and
 names the run in progress.
 
+### The review app's API
+
+`python -m sermon_shorts serve` runs the API the review web app talks to
+(localhost:8000; on the sprite, Caddy routes `/api/*` on the sprite URL to
+it, next to the clip files). Everything the commands above do is there,
+under the same roles, and every change lands in the same audit log. The
+endpoint reference is at `/api/docs` on a running server. Sign in by sending
+your API token (`users token` makes a new one) as
+`Authorization: Bearer ssk_...`, or once to `POST /api/v1/session`.
+
 ## Notes
 
 - **First run downloads the Whisper model** (~500 MB for `small`) — after that it

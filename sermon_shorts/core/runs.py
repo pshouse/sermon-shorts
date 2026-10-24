@@ -28,6 +28,7 @@ USER_ENV = "SERMON_SHORTS_USER"            # a login: the person starting the ru
 STARTED_BY_ENV = "SERMON_SHORTS_STARTED_BY"  # set by the workflow: "schedule" or "github:<login>"
 GITHUB_RUN_ENV = "SERMON_SHORTS_GITHUB_RUN"  # the Actions run id, to join the two histories
 LOG_ENV = "SERMON_SHORTS_LOG"              # the log file sprite_weekly.sh tees into
+RUN_ID_ENV = "SERMON_SHORTS_RUN_ID"        # set by the API, so it knows the id of a run it starts
 # A run on another machine can't be checked for a live process; after this
 # long it is assumed dead. The longest real run so far took well under an hour.
 STALE_AFTER = timedelta(hours=6)
@@ -106,12 +107,23 @@ def _reap(conn: sqlite3.Connection) -> None:
                          service=r["service_id"], run=r["id"], kind=r["kind"], error=why)
 
 
+def new_id() -> str:
+    return "r_" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "_" + secrets.token_hex(2)
+
+
+def running(conn: sqlite3.Connection) -> dict | None:
+    """The open run, after closing any whose process is gone."""
+    _reap(conn)
+    row = conn.execute("SELECT * FROM runs WHERE status = 'running'").fetchone()
+    return dict(row) if row else None
+
+
 def begin(kind: str, argv: list[str]) -> Run:
     """Open a run. Raises RunBusy if another is open and its process is alive."""
     global _current
     conn = connect()
     _reap(conn)
-    run_id = "r_" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "_" + secrets.token_hex(2)
+    run_id = os.environ.pop(RUN_ID_ENV, None) or new_id()
     actor = _starter(conn)
     try:
         with write(conn):
