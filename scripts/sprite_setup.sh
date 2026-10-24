@@ -20,7 +20,9 @@ echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select t
 sudo apt-get -qq update
 sudo DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
     libxcb1 libgl1 libglib2.0-0 fontconfig ttf-mscorefonts-installer caddy >/dev/null
-fc-list | grep -qi "arial black" || { echo "Arial Black did not install"; exit 1; }
+# grep without -q: -q exits at the first match, fc-list then dies of SIGPIPE
+# mid-list, and pipefail reports the font as missing even though it was found.
+fc-list | grep -i "arial black" >/dev/null || { echo "Arial Black did not install"; exit 1; }
 
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
