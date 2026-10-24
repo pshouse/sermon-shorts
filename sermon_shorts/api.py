@@ -35,7 +35,7 @@ from typing import Literal
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -52,6 +52,15 @@ FILES_URL_ENV = "SERMON_SHORTS_FILES_URL"   # where Caddy serves the data root (
 LOG_DIR_ENV = "SERMON_SHORTS_LOG_DIR"       # run logs the API may show (default ~/logs)
 INSECURE_COOKIE_ENV = "SERMON_SHORTS_INSECURE_COOKIE"  # "1" for plain-http local testing
 RUN_CMD_ENV = "SERMON_SHORTS_RUN_CMD"       # override how a weekly run is started
+WEB_DIR = Path(__file__).resolve().parent / "web"  # the review app (static, no build step)
+
+# The review app shows text that came from transcripts, Claude and people, so
+# it never builds HTML from data; this policy backs that up by refusing any
+# script or style that isn't the app's own files.
+APP_CSP = ("default-src 'self'; script-src 'self'; "
+           "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+           "img-src 'self' data:; media-src 'self'; connect-src 'self'; "
+           "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 GITHUB_REPO_ENV = "SERMON_SHORTS_GITHUB_REPO"  # e.g. pshouse/sermon-shorts, with GITHUB_TOKEN
 
 
@@ -70,7 +79,7 @@ def _error_response(request: Request, e: ApiError) -> JSONResponse:
 # --- request plumbing -------------------------------------------------------
 
 def get_conn():
-    conn = connect()
+    conn = connect(any_thread=True)
     try:
         yield conn
     finally:
@@ -348,6 +357,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Sermon Shorts API", version=__version__,
                   docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
     app.add_exception_handler(ApiError, _error_response)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/app"):
+            response.headers["Content-Security-Policy"] = APP_CSP
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "same-origin"
+            # Always fetch the newest app after a deploy (it's a few small files).
+            response.headers["Cache-Control"] = "no-cache"
+        return response
     v1 = "/api/v1"
 
     def wrap(fn):
@@ -711,6 +731,15 @@ def create_app() -> FastAPI:
         return {"ok": v.ok, "events": v.events, "tail": v.tail, "first_bad": v.first_bad,
                 "problem": v.problem or None}
 
+    # -- the review app --
+
+    from fastapi.staticfiles import StaticFiles
+
+    @app.get("/app", include_in_schema=False)
+    def app_root():
+        return RedirectResponse("/app/")
+
+    app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="app")
     return app
 
 
@@ -724,7 +753,16 @@ def serve(argv: list[str]) -> int:
     p.add_argument("--host", default="127.0.0.1",
                    help="default 127.0.0.1: only Caddy on the same machine reaches it")
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--files", action="store_true",
+                   help="also serve the clip files (the data root) at /, for trying the app "
+                        "without Caddy; on the sprite Caddy serves them")
     args = p.parse_args(argv)
-    uvicorn.run(create_app(), host=args.host, port=args.port, proxy_headers=True,
+    app = create_app()
+    if args.files:
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=records.data_root()), name="files")
+        print(f"Serving {records.data_root()} at / and the app at "
+              f"http://{args.host}:{args.port}/app/")
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True,
                 forwarded_allow_ips="127.0.0.1")
     return 0

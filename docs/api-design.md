@@ -3,8 +3,8 @@
 Status: proposal (2026-10-24). Built so far: step 0 (accounts, roles, the
 audit log), step 1 (services, candidates, clip fingerprints and runs are
 recorded), step 2 (decisions, notes, posts, the approval gate in
-`publish`) and step 3 (the HTTP API, `sermon_shorts/api.py`). Next: step 4,
-wiring the Studio screens to it.
+`publish`), step 3 (the HTTP API, `sermon_shorts/api.py`) and step 4 (the
+Studio web app, `sermon_shorts/web/`, served at `/app/`).
 
 ## Goal
 
@@ -427,7 +427,14 @@ durations come straight from these.
    a live event stream), GitHub run merging, the audit log with CSV export
    and verification, the Caddyfile and sprite services. API tests in
    `tests/test_api.py` (skipped where FastAPI isn't installed).
-4. **UI.** Wire the Studio screens to `/api/v1`.
+4. **UI (built).** `sermon_shorts/web/`: plain HTML, CSS and JavaScript (no
+   build step, like the rest of the repo), served by the API at `/app/`
+   and routed there by Caddy. Screens: This week, Review, Publish, a run's
+   live page, History & audit, People, sign-in, and joining from an invite
+   link. It builds the page with text only (never HTML from data) and is
+   served with a Content-Security-Policy that allows only its own scripts
+   and styles. Checked end to end in Chromium against the real API with
+   fake uploads, at desktop and phone widths.
 
 Each step is shippable by itself and is checked the way the repo checks
 things now: a `--whisper-model tiny` run, `--from-manifest --only N`, and

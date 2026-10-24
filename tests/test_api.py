@@ -283,6 +283,21 @@ class ApiTest(unittest.TestCase):
         r = self.client.get("/api/v1/runs/r_x/log", headers=self.as_(self.owner_token))
         self.assertEqual(r.status_code, 404)
 
+    # --- the review app ---
+
+    def test_app_is_served_with_a_strict_content_policy(self):
+        r = self.client.get("/app", follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (307, "/app/"))
+        r = self.client.get("/app/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('<script src="app.js" defer></script>', r.text)
+        csp = r.headers["content-security-policy"]
+        self.assertIn("script-src 'self'", csp)
+        self.assertNotIn("unsafe-inline", csp)
+        self.assertEqual(self.client.get("/app/app.js").status_code, 200)
+        # The API itself doesn't need the page policy.
+        self.assertNotIn("content-security-policy", self.client.get("/api/v1/health").headers)
+
     # --- audit ---
 
     def test_audit_lists_exports_and_verifies(self):

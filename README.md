@@ -355,6 +355,33 @@ python -m sermon_shorts services import "~/Downloads/Live_2026-10-18_7am_sermon_
 Only one run can happen at a time; a second one stops with "Not started" and
 names the run in progress.
 
+### The Studio (review web app)
+
+Everything above also works from a browser: **Sermon Shorts Studio**, at
+`<sprite URL>/app/` (the sprite URL's org sign-in first, then your API
+token once per browser). It has five screens:
+
+- **This week:** the newest service, what needs someone, the latest run's
+  steps, and the clips with their status. Owners can start a run here.
+- **Review:** watch each clip as it will post, read Claude's review and the
+  moments that didn't make the cut, leave notes, approve or reject.
+- **Publish:** pick approved clips, preview exactly what will go out, then
+  post; follow it live. Record Instagram posts made by hand and retry a
+  YouTube cover from here.
+- **History & audit:** every run (including GitHub runs that never reached
+  the sprite) and the audit log, filterable, with CSV export and a
+  verify check.
+- **People:** who has which role; owners invite (a one-time link), change
+  roles and remove people.
+
+New people join from their invite link and pick a login; they're signed in
+on that browser and shown their API token once.
+
+To try it on your own machine without Caddy:
+`python -m sermon_shorts serve --files`, then open
+http://127.0.0.1:8000/app/ (add `SERMON_SHORTS_INSECURE_COOKIE=1` to sign in
+over plain http).
+
 ### The review app's API
 
 `python -m sermon_shorts serve` runs the API the review web app talks to
