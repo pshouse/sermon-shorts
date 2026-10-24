@@ -25,10 +25,15 @@ trap 'kill $HEARTBEAT 2>/dev/null; sprite-env curl -s -X DELETE /v1/tasks/weekly
 git pull -q --ff-only || echo "warning: git pull failed; running the checked-out code"
 .venv/bin/pip install -q -r requirements.txt
 
+export SERMON_SHORTS_LOG="$LOG"  # recorded on the run, for the review app
+
 # The whisper model is already in the HF cache; going offline skips the Hub
 # lookup, which the sprite's shared egress IP gets rate-limited on.
 HF_HUB_OFFLINE=1 .venv/bin/python -u -m sermon_shorts --weekly --whisper-model medium "$@" \
     2>&1 | tee "$LOG"
 status=$?
 echo "=== exit $status ===" | tee -a "$LOG"
+# The audit log's tail hash, printed here so the GitHub Actions log keeps a
+# copy outside the sprite to check the database against later.
+.venv/bin/python -m sermon_shorts audit --verify 2>&1 | tee -a "$LOG" || true
 exit $status

@@ -47,6 +47,7 @@ def record(conn: sqlite3.Connection, actor: Actor, action: str, *,
     row = conn.execute("SELECT hash FROM audit ORDER BY seq DESC LIMIT 1").fetchone()
     prev = row["hash"] if row else GENESIS
     at = now()
+    data = {k: v for k, v in data.items() if v is not None}  # absent, not "None"
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = _digest(prev, at, actor.login, actor.via, action, service, clip, payload)
     cur = conn.execute(

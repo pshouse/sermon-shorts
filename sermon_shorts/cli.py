@@ -68,6 +68,46 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("users", "audit"):
         from .accounts_cli import users_main, audit_main
         return (users_main if argv[0] == "users" else audit_main)(argv[1:])
+    if argv and argv[0] in ("services", "runs"):
+        from .records_cli import services_main, runs_main
+        return (services_main if argv[0] == "services" else runs_main)(argv[1:])
+
+    # Every render command is recorded as a run (core/runs.py). The run opens
+    # once the arguments parse; this wrapper closes it however the pipeline
+    # exits. A nested call (--weekly's sermon and clips steps) joins it.
+    from .core import runs
+    owns = runs.current() is None
+    try:
+        rc = _pipeline(argv)
+    except SystemExit as e:
+        if owns:
+            failed = e.code not in (0, None)
+            runs.end(error=(str(e.code) if isinstance(e.code, str) else
+                            f"exit status {e.code}") if failed else None)
+        raise
+    except KeyboardInterrupt:
+        if owns:
+            runs.end(error="interrupted")
+        raise
+    except BaseException as e:
+        if owns:
+            runs.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if owns:
+        runs.end(rc)
+    return rc
+
+
+def _record(run, fn, *args, **kwargs):
+    """Run one database write for the open run, if there is one."""
+    if run is not None:
+        from .core.db import write
+        with write(run.conn):
+            fn(run.conn, *args, **kwargs)
+
+
+def _pipeline(argv: list[str]) -> int:
+    from .core import audit, records, runs
 
     parser = argparse.ArgumentParser(
         prog="sermon-shorts",
@@ -128,6 +168,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
+    if runs.current() is None:
+        kind = ("weekly" if args.weekly else "sermon" if args.sermon_only
+                else "rerender" if args.from_manifest else "clips")
+        try:
+            runs.begin(kind, argv)
+        except runs.RunBusy as e:
+            sys.exit(f"Not started: {e}")
+    run = runs.current()
+
     church = _load_church()
     if args.speaker:
         church = {**(church or {}), "speaker": args.speaker}
@@ -152,6 +201,13 @@ def main(argv: list[str] | None = None) -> int:
             video = download(recording, args.download_dir)
         except (SubsplashError, httpx.HTTPError) as e:
             sys.exit(f"Subsplash fetch failed: {e}")
+        service_id = records.service_id_for(video)
+        _record(run, records.upsert_service, service_id, source="subsplash",
+                title=recording.title, date=recording.date, speaker=recording.speaker,
+                recording_file=video)
+        run.attach(service_id)
+        run.step("fetch", title=recording.title, date=recording.date,
+                 speaker=recording.speaker, file=video.name, bytes=recording.file_size)
         if recording.speaker and not args.speaker:
             args.speaker = recording.speaker
             church = {**(church or {}), "speaker": recording.speaker}
@@ -161,6 +217,14 @@ def main(argv: list[str] | None = None) -> int:
         video = args.video
         if not video.exists():
             parser.error(f"video not found: {video}")
+        service_id = records.service_id_for(video)
+        conn = run.conn
+        fields = ({"sermon_file": video.resolve()} if video.stem.endswith("_sermon")
+                  else {"recording_file": video.resolve()})
+        if records.get_service(conn, service_id) is None:
+            fields.update(source="file", date=records.date_in(service_id))
+        _record(run, records.upsert_service, service_id, **fields)
+        run.attach(service_id)
 
     if args.weekly:
         sermon = video.parent / f"{video.stem}_sermon.mp4"
@@ -173,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         already = done_manifest if done_manifest.exists() else (same_day[0] if same_day else None)
         if already and not args.force:
             print(f"Already processed — {already} exists. Use --force to redo.")
+            run.skip(f"already processed: {already.parent.name}")
             return 0
         common = ["--whisper-model", args.whisper_model]
         trim_opts = ["--labeler", args.labeler, *(["--reencode"] if args.reencode else [])]
@@ -200,9 +265,11 @@ def main(argv: list[str] | None = None) -> int:
 
     steps = 3 if args.sermon_only else 4
     print(f"[1/{steps}] Transcribing {video.name}")
+    run.step("transcribe", "start", file=video.name, model=args.whisper_model)
     transcript = transcribe(video, model_size=args.whisper_model, language=args.language)
     if not transcript["segments"]:
         sys.exit("No speech found in the video.")
+    run.step("transcribe", segments=len(transcript["segments"]))
 
     if args.sermon_only:
         if args.labeler == "jev":
@@ -220,12 +287,25 @@ def main(argv: list[str] | None = None) -> int:
         minutes = (end - start) / 60
         print(f"  \"{window.title}\" — {start:.0f}s to {end:.0f}s ({minutes:.0f} min)")
         print(f"  ({window.reason})")
+        run.step("find_sermon", labeler=args.labeler, title=window.title,
+                 start=round(start, 2), end=round(end, 2))
 
         sermon_path = video.parent / f"{video.stem}_sermon.mp4"
         mode = "re-encoding (frame-accurate)" if args.reencode else "stream copy (instant, lossless)"
         print(f"[3/3] Trimming — {mode}")
         trim_video(video, start, end, sermon_path, reencode=args.reencode)
+        run.step("trim", file=sermon_path.name, reencode=args.reencode)
 
+        def _sermon_found(conn):
+            records.upsert_service(conn, service_id, sermon_file=sermon_path.resolve(),
+                                   sermon_title=window.title, sermon_start=round(start, 2),
+                                   sermon_end=round(end, 2), sermon_reason=window.reason,
+                                   labeler=args.labeler)
+            audit.record(conn, run.actor, "sermon.found", service=service_id,
+                         labeler=args.labeler, title=window.title, start=round(start, 2),
+                         end=round(end, 2), file=sermon_path.name, run=run.id)
+        _record(run, _sermon_found)
+        run.outcome = f"sermon trimmed ({minutes:.0f} min)"
         cache = save_shifted_transcript(transcript, sermon_path, args.whisper_model, start, end)
         print(f"  transcript re-based to {cache.name} "
               f"(a later --clips run on the sermon skips transcribing)")
@@ -240,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         if not manifest_file.exists():
             sys.exit(f"--from-manifest: no {manifest_file} found — run without the flag first.")
         print(f"[2/4] Re-rendering clips from {manifest_file.name} (skipping Claude)")
+        report = None
         saved = json.loads(manifest_file.read_text(encoding="utf-8"))
         selection = ClipSelection(
             service_summary=saved.get("summary", ""),
@@ -255,7 +336,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"(church profile: {church.get('church_name', 'unnamed')})")
         else:
             print(f"[2/4] Selecting the {args.clips} best moments with Claude")
-        selection = select_highlights(transcript, args.clips, church=church)
+        report: list[dict] = []
+        selection = select_highlights(transcript, args.clips, church=church, report=report)
+        run.step("select", candidates=len(report), chosen=len(selection.clips))
         if not selection.clips:
             sys.exit("Claude did not find any suitable clips. Try a larger --clips value or check the transcript cache.")
         print(f"  service summary: {selection.service_summary}")
@@ -271,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     src_w, src_h = video_dimensions(video)
     detector = FaceDetector()
     manifest = []
+    rendered_files: dict[int, str] = {}  # id(Clip) -> file, to link candidates to files
 
     for i, clip in items:
         if args.from_manifest:
@@ -300,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[3/4] Clip {i}/{len(selection.clips)}: \"{clip.title}\" "
               f"({start:.0f}s-{end:.0f}s, {duration:.0f}s, score {clip.score})")
 
+        run.step("render", "start", clip=i, title=clip.title)
         print("  tracking speaker for vertical crop...")
         track = track_speaker(video, start, end, detector)
         seen = sum(f is not None for f in track.faces)
@@ -351,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"  -> {sidecar.name} (title + description for upload)")
 
+        rendered_files[id(clip)] = out_name
+        run.step("render", clip=i, file=out_name, seconds=round(duration, 1))
         manifest.append({
             "file": out_name,
             "title": clip.title,
@@ -361,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
             "score": clip.score,
             "reason": clip.reason,
             "description": clip.description,
+            "fingerprint": records.fingerprint(
+                out_path, out_path.with_suffix(".jpg"), clip.title, clip.description),
         })
 
     if args.from_manifest and args.only is not None:
@@ -375,6 +464,19 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     print(f"[4/4] Done. {len(manifest)} clip(s) rendered in {out_dir} (details in clips.json)")
+
+    def _clips_made(conn):
+        records.upsert_service(conn, service_id, clips_dir=out_dir.resolve(),
+                               summary=selection.service_summary)
+        if report is not None:
+            for e in report:
+                e["clip_file"] = rendered_files.get(id(e.pop("_clip", None)))
+            records.replace_candidates(conn, service_id, run.id, report)
+        records.record_clips(conn, run.actor, service_id, out_dir, all_entries,
+                             {e["file"] for e in manifest}, run.id)
+    _record(run, _clips_made)
+    run.outcome = f"{len(manifest)} clip(s) rendered"
+    run.step("done", clips=len(manifest))
     return 0
 
 

@@ -17,9 +17,9 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_ENV = "SERMON_SHORTS_DB"
 DB_NAME = "sermon_shorts.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-_SCHEMA = """
+_SCHEMA_V1 = """
 CREATE TABLE users (
     id          INTEGER PRIMARY KEY,
     login       TEXT NOT NULL UNIQUE,
@@ -76,6 +76,93 @@ CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
     BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 """
 
+# v2: what the pipeline produces, so the review UI can show it.
+# clips.json / published.json stay the files the pipeline itself reads;
+# these tables are kept in step with them.
+_SCHEMA_V2 = """
+CREATE TABLE services (
+    id             TEXT PRIMARY KEY,   -- recording file stem, e.g. Live_2026-10-18_7am
+    title          TEXT,
+    date           TEXT,               -- YYYY-MM-DD
+    speaker        TEXT,
+    source         TEXT,               -- 'subsplash', 'file' or 'import'
+    recording_file TEXT,
+    sermon_file    TEXT,
+    clips_dir      TEXT,
+    sermon_title   TEXT,
+    sermon_start   REAL,               -- seconds in the recording, as cut
+    sermon_end     REAL,
+    sermon_reason  TEXT,
+    labeler        TEXT,
+    summary        TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE runs (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('weekly', 'sermon', 'clips', 'rerender')),
+    args          TEXT NOT NULL,       -- JSON list, the command line
+    status        TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'skipped')),
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    started_by    TEXT NOT NULL,       -- a login, 'schedule', or 'shell:<os user>'
+    via           TEXT NOT NULL,       -- 'cli' or 'github'
+    service_id    TEXT REFERENCES services(id),
+    github_run_id TEXT,
+    log_path      TEXT,
+    pid           INTEGER,
+    host          TEXT,
+    outcome       TEXT,                -- one line for the history screen
+    error         TEXT
+);
+-- One pipeline run at a time (a crashed run is marked failed on the next start).
+CREATE UNIQUE INDEX one_running ON runs(status) WHERE status = 'running';
+
+CREATE TABLE run_events (
+    id     INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    t      TEXT NOT NULL,
+    step   TEXT NOT NULL,              -- fetch, transcribe, find_sermon, trim, select, render, done
+    state  TEXT NOT NULL,              -- start, done, skip, fail
+    data   TEXT NOT NULL               -- JSON
+);
+CREATE INDEX run_events_run ON run_events(run_id, id);
+
+CREATE TABLE candidates (
+    service_id TEXT NOT NULL REFERENCES services(id),
+    n          INTEGER NOT NULL,       -- the number the review step printed
+    run_id     TEXT REFERENCES runs(id),
+    title      TEXT NOT NULL,
+    start_s    REAL NOT NULL,
+    end_s      REAL NOT NULL,
+    pick_score INTEGER,
+    verdict    TEXT,                   -- keep, adjust, reject; NULL if not reviewed
+    standalone INTEGER,
+    note       TEXT,
+    outcome    TEXT NOT NULL,          -- rendered, below_bar, rejected, too_short, over_count, unreviewed, out_of_range
+    clip_file  TEXT,
+    PRIMARY KEY (service_id, n)
+);
+
+CREATE TABLE clips (
+    service_id  TEXT NOT NULL REFERENCES services(id),
+    file        TEXT NOT NULL,
+    n           INTEGER NOT NULL,
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL,
+    start_s     REAL NOT NULL,
+    end_s       REAL NOT NULL,
+    score       INTEGER,
+    fingerprint TEXT NOT NULL,
+    rendered_at TEXT NOT NULL,
+    run_id      TEXT REFERENCES runs(id),
+    PRIMARY KEY (service_id, file)
+);
+"""
+
+MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2}
+
 
 def db_path() -> Path:
     return Path(os.environ.get(DB_ENV) or PROJECT_DIR / DB_NAME).expanduser()
@@ -92,9 +179,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")  # the API reads while the CLI writes
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version == 0:
-        conn.executescript(f"BEGIN; {_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;")
-    elif version > SCHEMA_VERSION:
+    for target in range(version + 1, SCHEMA_VERSION + 1):
+        conn.executescript(f"BEGIN; {MIGRATIONS[target]} PRAGMA user_version = {target}; COMMIT;")
+    if version > SCHEMA_VERSION:
         raise RuntimeError(f"{path} was written by a newer sermon-shorts "
                            f"(schema {version}); update this checkout")
     return conn

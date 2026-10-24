@@ -314,6 +314,21 @@ python -m sermon_shorts audit --csv --limit 0 > audit.csv
 python -m sermon_shorts audit --verify       # check nothing was altered
 ```
 
+Every render run is recorded too, along with what it produced, including the
+candidate clips that didn't make it and Claude's note on each:
+
+```
+python -m sermon_shorts runs                 # run history: who started it, status, time
+python -m sermon_shorts runs show            # the newest run, step by step
+python -m sermon_shorts services             # one line per service
+python -m sermon_shorts services show        # clips, fingerprints, every candidate
+python -m sermon_shorts services import "~/Downloads/Live_2026-10-18_7am_sermon_clips" \
+    --title "The Spirit of God Uses the Word of God"   # folders made before this existed
+```
+
+Only one run can happen at a time; a second one stops with "Not started" and
+names the run in progress.
+
 ## Notes
 
 - **First run downloads the Whisper model** (~500 MB for `small`) — after that it

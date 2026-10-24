@@ -268,7 +268,8 @@ def _candidate_bounds(transcript: dict, clip: Clip) -> tuple[float, float]:
             end_at if end_at is not None and end_at > (hook_at or start) else end)
 
 
-def review_clips(transcript: dict, candidates: list[Clip]) -> list[Clip]:
+def review_clips(transcript: dict, candidates: list[Clip],
+                 report: list[dict] | None = None) -> list[Clip]:
     """Second pass: a stranger's-eye check of each candidate as it will be cut.
 
     Picking clips from a whole transcript, Claude reliably finds good
@@ -277,6 +278,10 @@ def review_clips(transcript: dict, candidates: list[Clip]) -> list[Clip]:
     speaker finished his point. Shown one candidate at a time with the words
     around it, the same model is far better at judging (and repairing) where
     the idea really starts and lands.
+
+    If `report` is given, one entry per candidate is appended to it (verdict,
+    scores, note, outcome), dropped ones included, so the review UI can show
+    why a moment didn't make it. Kept entries carry the final Clip as "_clip".
     """
     from .transcribe import _all_words
 
@@ -293,28 +298,49 @@ def review_clips(transcript: dict, candidates: list[Clip]) -> list[Clip]:
             f"AFTER:\n{_timed_lines(after)}\n")
     result = _parse_call(REVIEW_PROMPT, "\n".join(blocks), ReviewResult)
 
-    reviewed = []
+    reviewed, entries = [], {}
     for r in result.reviews:
-        if not 1 <= r.candidate <= len(candidates):
+        if not 1 <= r.candidate <= len(candidates) or r.candidate in entries:
             continue
         clip = candidates[r.candidate - 1]
         print(f"  review {r.candidate}: {r.verdict}, standalone {r.standalone} — {r.note}")
+        start, end = _candidate_bounds(transcript, clip)
+        entry = entries[r.candidate] = {
+            "n": r.candidate, "title": clip.title, "pick_score": clip.score,
+            "verdict": r.verdict, "standalone": r.standalone, "note": r.note,
+            "start": round(start, 2), "end": round(end, 2)}
         if r.verdict == "reject" or r.standalone < MIN_STANDALONE:
+            entry["outcome"] = "rejected" if r.verdict == "reject" else "below_bar"
             continue
         if r.verdict == "adjust":
             clip = clip.model_copy(update={"start": r.start, "end": r.end,
                                            "hook": r.hook, "ending": r.ending})
         start, end = _candidate_bounds(transcript, clip)
+        entry.update(start=round(start, 2), end=round(end, 2))
         if end - start < MIN_CLIP_SECONDS:
             print(f"    dropped: {end - start:.0f}s is too short to hold a whole idea")
+            entry["outcome"] = "too_short"
             continue
+        entry.update(outcome="kept", _clip=clip)
         reviewed.append((r.standalone, clip))
+    if report is not None:
+        for n, clip in enumerate(candidates, 1):
+            if n not in entries:  # the review answered for fewer candidates than it got
+                start, end = _candidate_bounds(transcript, clip)
+                entries[n] = {"n": n, "title": clip.title, "pick_score": clip.score,
+                              "start": round(start, 2), "end": round(end, 2),
+                              "outcome": "unreviewed"}
+        report.extend(entries[n] for n in sorted(entries))
     reviewed.sort(key=lambda sc: (sc[0], sc[1].score), reverse=True)
     return [clip for _, clip in reviewed]
 
 
-def select_highlights(transcript: dict, n_clips: int,
-                      church: dict | None = None) -> ClipSelection:
+def select_highlights(transcript: dict, n_clips: int, church: dict | None = None,
+                      report: list[dict] | None = None) -> ClipSelection:
+    """Pick and review clips. With `report`, every candidate Claude proposed is
+    appended to it with its outcome (rendered, below_bar, rejected, too_short,
+    over_count, unreviewed, out_of_range); rendered entries keep the chosen
+    Clip as "_clip" so the caller can attach the file it renders to."""
     from .transcribe import transcript_as_text
 
     selection = _parse_call(
@@ -328,14 +354,34 @@ def select_highlights(transcript: dict, n_clips: int,
     for c in selection.clips:
         c.description = _append_footer(plain_punctuation(c.description), church)
 
-    candidates = [c for c in selection.clips if c.end > c.start and 10 <= (c.end - c.start) <= 120]
+    proposed = list(selection.clips)
+    candidates = [c for c in proposed if c.end > c.start and 10 <= (c.end - c.start) <= 120]
     candidates.sort(key=lambda c: c.score, reverse=True)
     print(f"  {len(candidates)} candidates; reviewing each as a stranger would see it")
-    kept = review_clips(transcript, candidates)
+    entries: list[dict] = []
+    kept = review_clips(transcript, candidates, report=entries)
     if not kept:
         print("  warning: no candidate passed review — using the best unreviewed ones")
         kept = candidates
+        for e in entries:
+            e["_clip"] = candidates[e["n"] - 1]
     selection.clips = kept[:n_clips]
+
+    if report is not None:
+        chosen = {id(c) for c in selection.clips}
+        for e in entries:
+            if id(e.get("_clip")) in chosen:
+                e["outcome"] = "rendered"
+            else:
+                e.pop("_clip", None)
+                if e["outcome"] == "kept":
+                    e["outcome"] = "over_count"
+        # Proposals outside 10-120s never reached the review; list them too.
+        reviewed_ids = {id(c) for c in candidates}
+        for c in (c for c in proposed if id(c) not in reviewed_ids):
+            entries.append({"n": len(entries) + 1, "title": c.title, "pick_score": c.score,
+                            "start": c.start, "end": c.end, "outcome": "out_of_range"})
+        report.extend(entries)
     return selection
 
 

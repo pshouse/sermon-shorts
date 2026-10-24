@@ -1,7 +1,8 @@
 # API and CLI layer: design
 
-Status: proposal (2026-10-24). Built so far: step 0, accounts, roles and the audit log
-(`sermon_shorts/core/`, `sermon-shorts users`, `sermon-shorts audit`).
+Status: proposal (2026-10-24). Built so far: step 0 (accounts, roles, the
+audit log) and step 1 (services, candidates, clip fingerprints and runs are
+recorded; `sermon-shorts services` and `sermon-shorts runs` read them).
 
 ## Goal
 
@@ -87,17 +88,17 @@ Data root: `SERMON_SHORTS_DATA` (default `~/Downloads`, as now).
     clips.json          (existing; each clip gains "fingerprint")
     published.json      (existing; entries gain "by", "manual", "cover")
     01_...mp4 .jpg .txt (existing)
-  runs/<run id>.log     NEW  the human log (what weekly-*.log is today)
+  (run logs stay in ~/logs/weekly-*.log on the sprite; each run row records its path)
 
 <project root>/sermon_shorts.db   (gitignored; SERMON_SHORTS_DB overrides)
   users, tokens, invites           BUILT  (step 0, below)
   audit                            BUILT  append-only, hash-chained
-  services                         NEW  Subsplash metadata, sermon window, summary
-  candidates                       NEW  every candidate: verdict, scores, note, outcome
-  clips                            NEW  mirrors clips.json + fingerprint
+  services                         BUILT  Subsplash metadata, sermon window, summary
+  candidates                       BUILT  every candidate: verdict, scores, note, outcome
+  clips                            BUILT  mirrors clips.json + fingerprint
+  runs, run_events                 BUILT  kind, args, starter, status, step timings
   decisions                        NEW  approve/reject with fingerprint and note
   posts                            NEW  mirrors published.json + who, manual, cover state
-  runs, run_events                 NEW  kind, args, starter, status, step timings
 ```
 
 `clips.json` and `published.json` keep being written exactly as now, because
@@ -109,9 +110,11 @@ database rows are written alongside them.
 `fingerprint = sha256(mp4 bytes) + sha256(jpg bytes) + sha256(title + "\n" + description)`,
 stored as one combined hex digest in `clips.json` at render time.
 
-An approval names the fingerprint it covers. A `--from-manifest` re-render
-or a description edit changes the fingerprint, so the old approval stops
-counting and the clip shows as "Waiting for review" again. This is the rule
+An approval names the fingerprint it covers. A re-render that changes the
+video or cover, or a title or description edit, changes the fingerprint, so
+the old approval stops counting and the clip shows as "Waiting for review"
+again. (Rendering is deterministic: re-rendering with nothing changed gives
+the same bytes and keeps the approval, which is the right answer.) This is the rule
 the Review screen states: "Re-rendering the clip clears it."
 
 ### Candidates
@@ -307,14 +310,15 @@ which picks the newest. Today's `publish` already behaves this way.
 | Command | Does |
 |---|---|
 | `sermon-shorts <video> ...`, `--weekly`, `--sermon-only`, `--from-manifest` | unchanged, but each now records the run, its events, the service, its candidates and clip fingerprints |
-| `sermon-shorts services` | list services with clip/approval/post counts and "needs you" |
-| `sermon-shorts show [SERVICE]` | one service: clips, decisions, posts, needs-you items |
+| `sermon-shorts services [list]` | services, newest first, with clip and candidate counts and the last run's status (built; approval/post counts and "needs you" come in step 2) |
+| `sermon-shorts services show [SERVICE]` | one service: sermon window, summary, clips with fingerprints, every candidate with its outcome and Claude's note (built; decisions and posts in step 2) |
+| `sermon-shorts services import FOLDER [--title --speaker --date]` | record a clips folder made before the database (built) |
 | `sermon-shorts approve [SERVICE] N... [--note TEXT]` | record approvals for the clips' current fingerprints |
 | `sermon-shorts reject [SERVICE] N --note TEXT` | record a rejection |
 | `sermon-shorts publish [SERVICE] N... [--to ...] [--dry-run] [--yes]` | as today, plus rule 1: unapproved or stale clips are listed as skipped. `--approve` records the approvals in the same step, for the one-person case, and logs them as such |
 | `sermon-shorts mark-posted [SERVICE] N instagram --url URL` | record a manual post |
 | `sermon-shorts retry-cover [SERVICE] N` | retry the YouTube cover |
-| `sermon-shorts runs` / `runs show ID` / `runs log ID` | run history and logs |
+| `sermon-shorts runs [list]` / `runs show [ID]` | run history; one run's steps with timings (built) |
 | `sermon-shorts audit [--service S] [--csv] [--verify]` | read, export or verify the log |
 | `sermon-shorts users init / invite / invites / revoke-invite / accept / list / role / remove / token / tokens / revoke-token` | people, roles and tokens (built) |
 | `sermon-shorts serve [--port 8000]` | run the API (imports FastAPI/uvicorn lazily, as other optional deps are) |
@@ -361,14 +365,20 @@ durations come straight from these.
 0. **Accounts and the audit log (built).** SQLite store, root owner,
    invites, reviewer/approver/owner, tokens, hash-chained audit, tests in
    `tests/` (`python -m unittest discover tests`).
-1. **Record what's missing (CLI only, no server).** Services, candidates,
-   fingerprints, run records and progress events. Backfill the Oct 18 folder: its
-   approvals are logged as `clip.approved` with `"backfilled": true` and the
-   publish time from `published.json`, because the real approval time was
-   never recorded.
-2. **Decisions and the approval gate.** `approve`, `reject`, `show`,
-   `services`, `mark-posted`, `retry-cover`, and rule 1 in
-   `publish`. After this step the CLI alone is auditable.
+1. **Record what's missing (built).** Every render command opens a run
+   (one at a time; a crashed run is reaped on the next start) and records
+   its steps. Runs record the service (with Subsplash metadata), the sermon
+   window, every candidate with Claude's verdict, scores, note and outcome,
+   and each clip's fingerprint (also written into `clips.json`). The GitHub
+   workflow passes its run id and who started it, and `sprite_weekly.sh`
+   prints the audit tail hash into the Actions log.
+   `services import` brings in older folders such as Oct 18's.
+2. **Decisions and the approval gate.** `approve`, `reject`, `mark-posted`,
+   `retry-cover`, the `decisions` and `posts` tables, and rule 1 in
+   `publish`. Backfill the Oct 18 approvals as `clip.approved` with
+   `"backfilled": true` and the publish time from `published.json`, because
+   the real approval time was never recorded. After this step the CLI alone
+   is auditable.
 3. **HTTP API.** `serve`, tokens, the Caddy proxy, GitHub run merging,
    the event stream.
 4. **UI.** Wire the Studio screens to `/api/v1`.
