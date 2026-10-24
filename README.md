@@ -195,15 +195,22 @@ and the YouTube files onto the sprite with `sprite file push` — they never
 go in git. Publish from there the same way:
 
 ```
-sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts publish 1 3'
+sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts approve 1 3 --as pshouse'
+sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python -m sermon_shorts publish 1 3 --yes --as pshouse'
 ```
+
+(`sprite exec` gives no terminal to answer the confirmation prompt, so
+`publish` there always needs `--yes`; check with `--dry-run` first.)
 
 ## Publishing
 
 Nothing is posted automatically — the weekly run only renders clips. Watch
-them, then post the ones you approve by number:
+them, approve the ones that should go out (an approver or owner; see
+[People and roles](#people-and-roles)), then post them by number:
 
 ```
+export SERMON_SHORTS_USER=pshouse            # or --as pshouse on each command
+python -m sermon_shorts approve "~/Downloads/Kings and Kingdoms_sermon_clips" 1 3
 python -m sermon_shorts publish "~/Downloads/Kings and Kingdoms_sermon_clips" 1 3
 ```
 
@@ -212,14 +219,33 @@ Leave the folder off to use the newest `*_clips` folder in `~/Downloads`
 out and confirm with `y`; clips post **publicly, right away** to YouTube
 Shorts, Instagram Reels and Facebook Reels, using the title, description and
 cover image already generated. Each post is recorded in the folder's
-`published.json`, so running the same command again never double-posts.
+`published.json` and the database, so running the same command again never
+double-posts.
+
+An approval covers the clip **exactly as it is on disk**: video, cover,
+title and description. If any of them changes afterwards (a re-render, an
+edited description), `publish` skips the clip until someone approves it
+again. A clip nobody approved is skipped with the reason. When one person
+does both, `publish --approve` records the approval and posts in one step.
 
 | Flag | Meaning |
 |---|---|
 | `--to youtube instagram facebook` | post only to these (default: every connected platform) |
-| `--dry-run` | show what would be posted, post nothing |
+| `--dry-run` | show what would be posted, post nothing (no name needed) |
 | `--yes` | skip the confirmation prompt |
+| `--as LOGIN` | who is posting (default: `$SERMON_SHORTS_USER`) |
+| `--approve` | also approve the named clips that aren't yet, once you confirm |
 | `--connect youtube` / `--connect meta` | one-time account setup (below) |
+
+Reviewing and following up:
+
+```
+python -m sermon_shorts note 2 "The verse on screen is wrong"        # anyone: a note, no decision
+python -m sermon_shorts reject 2 --note "Wrong verse reference"       # approvers: a reason is required
+python -m sermon_shorts mark-posted 1 instagram --url https://...     # record a post made in the app
+python -m sermon_shorts retry-cover 2                                 # YouTube cover failed: try again
+python -m sermon_shorts services show                                 # status, posts and what needs you
+```
 
 ### One-time setup: YouTube
 
@@ -276,6 +302,68 @@ Facebook Reels get the designed cover.
 Instagram's API also rejects Reels longer than about 65 seconds (an opaque
 `ProcessingFailedError`, regardless of file size). `publish` skips Instagram
 for longer clips and says so — post those from the Instagram app.
+
+## People and roles
+
+The review web app (in progress, see `docs/api-design.md`) needs to know who
+is approving and posting. Accounts and the audit log live in
+`sermon_shorts.db` in the project folder (gitignored).
+
+Roles escalate: a **reviewer** can see everything and leave notes, an
+**approver** can also approve, reject and publish clips, and an **owner**
+can also start runs and manage people.
+
+Once, on the machine that runs the service, create the root owner:
+
+```
+python -m sermon_shorts users init --login pshouse --name "Patrick S."
+export SERMON_SHORTS_USER=pshouse      # who you act as from now on
+```
+
+It prints an API token once; keep it in a password manager. Then invite
+people (owners only) and send each one their code privately:
+
+```
+python -m sermon_shorts users invite approver --note "Sarah, comms team"
+python -m sermon_shorts users accept <code> --login sarah --name "Sarah K."   # they run this
+python -m sermon_shorts users list
+python -m sermon_shorts users role sarah owner     # promote / demote
+python -m sermon_shorts users remove sarah         # also revokes their tokens
+```
+
+The root owner is always an owner and can't be removed. Every change is in
+the audit log, which can't be edited:
+
+```
+python -m sermon_shorts audit                # newest 50 events
+python -m sermon_shorts audit --csv --limit 0 > audit.csv
+python -m sermon_shorts audit --verify       # check nothing was altered
+```
+
+Every render run is recorded too, along with what it produced, including the
+candidate clips that didn't make it and Claude's note on each:
+
+```
+python -m sermon_shorts runs                 # run history: who started it, status, time
+python -m sermon_shorts runs show            # the newest run, step by step
+python -m sermon_shorts services             # one line per service
+python -m sermon_shorts services show        # clips, fingerprints, every candidate
+python -m sermon_shorts services import "~/Downloads/Live_2026-10-18_7am_sermon_clips" \
+    --title "The Spirit of God Uses the Word of God"   # folders made before this existed
+```
+
+Only one run can happen at a time; a second one stops with "Not started" and
+names the run in progress.
+
+### The review app's API
+
+`python -m sermon_shorts serve` runs the API the review web app talks to
+(localhost:8000; on the sprite, Caddy routes `/api/*` on the sprite URL to
+it, next to the clip files). Everything the commands above do is there,
+under the same roles, and every change lands in the same audit log. The
+endpoint reference is at `/api/docs` on a running server. Sign in by sending
+your API token (`users token` makes a new one) as
+`Authorization: Bearer ssk_...`, or once to `POST /api/v1/session`.
 
 ## Notes
 

@@ -48,6 +48,10 @@ jobs:
         env:
           LABELER: ${{ inputs.labeler || 'claude' }}
           FORCE: ${{ inputs.force && '--force' || '' }}
+          # Recorded on the run in the sprite's database, so the review app can
+          # join its run history to this workflow's (and show who started it).
+          STARTED_BY: ${{ github.event_name == 'schedule' && 'schedule' || format('github:{0}', github.triggering_actor) }}
         run: |
           sprite exec -s sermon-shorts --no-stdin -- \
+            env SERMON_SHORTS_GITHUB_RUN="$GITHUB_RUN_ID" SERMON_SHORTS_STARTED_BY="$STARTED_BY" \
             /home/sprite/sermon-shorts/scripts/sprite_weekly.sh --labeler "$LABELER" $FORCE

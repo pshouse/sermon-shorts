@@ -1,0 +1,18 @@
+# The sprite's one public port (behind the sprite URL's org auth): the review
+# app's API, and the rendered clips next to it at the same URLs as before.
+# Run by the `clips` sprite service; see scripts/sprite_setup.sh.
+:8080 {
+	# python -m sermon_shorts serve, listening on localhost only.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			# Pass run progress (server-sent events) through as it happens.
+			flush_interval -1
+		}
+	}
+
+	# The clips, read-only, with the byte-range support iOS needs to play MP4s.
+	handle {
+		root * {$HOME}/Downloads
+		file_server browse
+	}
+}

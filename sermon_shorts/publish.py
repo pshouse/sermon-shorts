@@ -1,19 +1,21 @@
 """Post reviewed clips to YouTube Shorts, Instagram Reels and Facebook Reels.
 
 Nothing here runs on its own. The weekly job only renders clips; a clip goes
-out when someone who has watched it names it on the command line:
+out when a named person approves it and someone allowed to publish names it:
 
+    python -m sermon_shorts approve "<clips folder>" 1 3
     python -m sermon_shorts publish "<clips folder>" 1 3
 
-Each post is recorded in the folder's published.json, so re-running the same
-command never posts a clip to the same platform twice.
+Only clips whose latest decision approves them exactly as they are on disk
+are posted (core/review.py). Each post is recorded in the folder's
+published.json and the database, so re-running the same command never posts
+a clip to the same platform twice.
 """
 
 from __future__ import annotations
 
 import argparse
 import getpass
-import json
 import os
 import sys
 import time
@@ -22,6 +24,11 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv, set_key
+
+from .core import posts, records, review, users
+from .core.audit import Actor
+from .core.db import connect
+from .core.posts import LEDGER, PLATFORMS
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_DIR / ".env"
@@ -32,32 +39,11 @@ YT_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 YT_CATEGORY = "29"  # Nonprofits & Activism
 
 GRAPH = "https://graph.facebook.com/v23.0"
-PLATFORMS = ("youtube", "instagram", "facebook")
-LEDGER = "published.json"
 PROCESSING_TIMEOUT = 600  # seconds to wait for Meta to finish processing a video
-# Instagram's upload host rejects longer Reels with an opaque ProcessingFailedError,
-# whatever the file size. Measured 2026-10-07: 65 s accepted, 70 s rejected.
-IG_MAX_SECONDS = 65
 
 
 class PublishError(Exception):
     pass
-
-
-# --- published.json ---------------------------------------------------------
-
-def _load_ledger(folder: Path) -> dict:
-    path = folder / LEDGER
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-
-def _record(folder: Path, ledger: dict, file: str, platform: str, post_id: str, url: str) -> None:
-    # Written after every single post, so a failure halfway through a batch
-    # still leaves an accurate record of what actually went out.
-    ledger.setdefault(file, {})[platform] = {
-        "id": post_id, "url": url, "at": datetime.now().isoformat(timespec="seconds"),
-    }
-    (folder / LEDGER).write_text(json.dumps(ledger, indent=2), encoding="utf-8")
 
 
 # --- YouTube ----------------------------------------------------------------
@@ -97,7 +83,20 @@ def _yt_text(text: str) -> str:
     return text.replace("<", "").replace(">", "")  # YouTube rejects angle brackets
 
 
-def publish_youtube(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str]:
+def set_youtube_cover(video_id: str, jpg: Path, yt=None) -> None:
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaFileUpload
+
+    yt = yt or _youtube()
+    try:
+        yt.thumbnails().set(videoId=video_id,
+                            media_body=MediaFileUpload(str(jpg), mimetype="image/jpeg")
+                            ).execute()
+    except HttpError as e:
+        raise PublishError(e.reason) from e
+
+
+def publish_youtube(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, str | None]:
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
@@ -124,15 +123,17 @@ def publish_youtube(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str]:
         print("    note: YouTube locked this video as private — until the API project "
               "passes YouTube's audit it can only upload private videos "
               "(see 'Publishing' in the README).")
+    cover = None
     if jpg:
         try:
-            yt.thumbnails().set(videoId=video_id,
-                                media_body=MediaFileUpload(str(jpg), mimetype="image/jpeg")
-                                ).execute()
-        except HttpError as e:
-            print(f"    cover image not set ({e.reason}) — the channel may need phone "
-                  "verification for custom thumbnails")
-    return video_id, f"https://youtube.com/shorts/{video_id}"
+            set_youtube_cover(video_id, jpg, yt)
+            cover = "set"
+        except PublishError as e:
+            cover = "failed"
+            print(f"    cover image not set ({e}) — try again later with retry-cover; "
+                  "if it keeps failing, the channel may need phone verification "
+                  "for custom thumbnails")
+    return video_id, f"https://youtube.com/shorts/{video_id}", cover
 
 
 # --- Instagram + Facebook (Meta Graph API) ----------------------------------
@@ -193,7 +194,7 @@ def _caption(clip: dict) -> str:
     return f"{clip['title']}\n\n{clip.get('description', '')}".strip()[:2200]
 
 
-def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str]:
+def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, None]:
     token = _meta_token()
     ig = _meta_ids(token)["ig_user_id"]
     if not ig:
@@ -223,10 +224,10 @@ def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str
     link = _graph("GET", media["id"], token, params={"fields": "permalink"}).get("permalink", "")
     # The Graph API only takes a cover from a public URL, so the designed .jpg
     # can't be attached here; Instagram uses the first frame unless changed in the app.
-    return media["id"], link
+    return media["id"], link, None
 
 
-def publish_facebook(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str]:
+def publish_facebook(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, str | None]:
     token = _meta_token()
     page = _meta_ids(token)["page_id"]
     start = _graph("POST", f"{page}/video_reels", token, data={"upload_phase": "start"})
@@ -249,13 +250,16 @@ def publish_facebook(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str]
     else:
         print("    Facebook is still processing — it will go live when done")
 
+    cover = None
     if jpg:
         try:
             _graph("POST", f"{video_id}/thumbnails", token, data={"is_preferred": "true"},
                    files={"source": (jpg.name, jpg.read_bytes(), "image/jpeg")})
+            cover = "set"
         except PublishError as e:
+            cover = "failed"
             print(f"    cover image not set ({e})")
-    return video_id, f"https://www.facebook.com/reel/{video_id}"
+    return video_id, f"https://www.facebook.com/reel/{video_id}", cover
 
 
 PUBLISHERS = {"youtube": publish_youtube, "instagram": publish_instagram,
@@ -310,10 +314,7 @@ def connect_meta() -> None:
 
 # --- command line -----------------------------------------------------------
 
-def _newest_clips_folder() -> Path | None:
-    manifests = sorted((Path.home() / "Downloads").glob("*_clips/clips.json"),
-                       key=lambda p: p.stat().st_mtime)
-    return manifests[-1].parent if manifests else None
+USER_ENV = "SERMON_SHORTS_USER"
 
 
 def main(argv: list[str]) -> int:
@@ -322,8 +323,8 @@ def main(argv: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="sermon-shorts publish",
-        description="Post clips you've reviewed. Name the folder (default: the newest "
-                    "*_clips folder in ~/Downloads) and the clip numbers to post.")
+        description="Post approved clips. Name the folder or service (default: the "
+                    "newest *_clips folder in ~/Downloads) and the clip numbers to post.")
     parser.add_argument("targets", nargs="*", metavar="[FOLDER] N",
                         help="optional clips folder, then clip numbers (e.g. 1 3)")
     parser.add_argument("--to", nargs="+", choices=PLATFORMS, default=None,
@@ -331,6 +332,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="show what would be posted without posting anything")
     parser.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
+    parser.add_argument("--as", dest="as_user", metavar="LOGIN",
+                        help=f"who is posting (default: ${USER_ENV}); needs approver or above")
+    parser.add_argument("--approve", action="store_true",
+                        help="also record your approval of the named clips that aren't "
+                             "approved yet (one person reviewing and posting)")
+    parser.add_argument("--note", default="", help="with --approve: a note for the record")
     parser.add_argument("--connect", choices=["youtube", "meta"],
                         help="one-time login: youtube (opens a browser) or meta "
                              "(Facebook Page + its linked Instagram)")
@@ -347,17 +354,31 @@ def main(argv: list[str]) -> int:
         connect_meta()
         return 0
 
+    conn = connect()
+    login = args.as_user or os.environ.get(USER_ENV)
+    user = users.get(conn, login) if login else None
+    if login and user is None:
+        sys.exit(f"No active user {login!r} (see: sermon-shorts users list).")
+    if not args.dry_run:
+        # Every post is attributed to a person; see 'People and roles' in the README.
+        if user is None:
+            sys.exit(f"Say who is posting: --as LOGIN, or set {USER_ENV}.")
+        if not user.can("publish"):
+            sys.exit(f"{user.login} is a {user.role}; publishing needs approver or above.")
+        if args.approve and not user.can("approve"):
+            sys.exit(f"{user.login} can't approve clips.")
+    actor = user.actor("cli") if user else Actor(f"shell:{getpass.getuser()}", "cli")
+
     targets = list(args.targets)
-    if targets and not targets[0].isdigit():
-        folder = Path(targets.pop(0)).expanduser()
-    else:
-        folder = _newest_clips_folder()
-        if folder is None:
-            parser.error("no *_clips folder found in ~/Downloads — name the folder")
-        print(f"Clips folder: {folder}")
-    if not (folder / "clips.json").exists():
-        parser.error(f"no clips.json in {folder}")
-    clips = json.loads((folder / "clips.json").read_text(encoding="utf-8"))["clips"]
+    try:
+        if targets and not targets[0].isdigit():
+            folder = records.resolve_folder(conn, targets.pop(0))
+        else:
+            folder = records.resolve_folder(conn, None)
+            print(f"Clips folder: {folder}")
+    except FileNotFoundError as e:
+        parser.error(str(e))
+    clips = records.load_manifest(folder)
     if not targets:
         for n, c in enumerate(clips, 1):
             print(f"  {n}. {c['title']}  ({c['file']})")
@@ -365,37 +386,45 @@ def main(argv: list[str]) -> int:
         return 2
     if not all(t.isdigit() and 1 <= int(t) <= len(clips) for t in targets):
         parser.error(f"clip numbers must be between 1 and {len(clips)}")
-    chosen = [clips[int(t) - 1] for t in dict.fromkeys(targets)]
+    chosen = [int(t) for t in dict.fromkeys(targets)]
+    for n in chosen:
+        if not (folder / clips[n - 1]["file"]).exists():
+            sys.exit(f"{clips[n - 1]['file']} is missing from {folder}")
 
     platforms = args.to or _configured()
     if not platforms:
         sys.exit("No platforms connected yet — run publish --connect youtube and/or "
                  "publish --connect meta (see 'Publishing' in the README).")
 
-    ledger = _load_ledger(folder)
-    jobs = []
-    for clip in chosen:
-        mp4 = folder / clip["file"]
-        if not mp4.exists():
-            sys.exit(f"{mp4.name} is missing from {folder}")
-        jpg = mp4.with_suffix(".jpg")
-        for platform in platforms:
-            done = ledger.get(clip["file"], {}).get(platform)
-            seconds = clip["end"] - clip["start"]
-            if done:
-                print(f"  already on {platform}: {clip['title']} — {done['url']}")
-            elif platform == "instagram" and seconds > IG_MAX_SECONDS:
-                print(f"  too long for Instagram's API ({seconds:.0f}s, limit "
-                      f"{IG_MAX_SECONDS}s) — post it from the Instagram app: {clip['title']}")
-            else:
-                jobs.append((clip, mp4, jpg if jpg.exists() else None, platform))
+    service_id = records.ensure_service(conn, actor, folder)
+    jobs, skipped = posts.plan(conn, service_id, folder, chosen, platforms)
+    to_approve = []
+    if args.approve:
+        # One person approving and posting in one step. The approvals are only
+        # recorded once the post is confirmed, and are logged as approvals.
+        to_approve = [s["n"] for s in skipped if s["kind"] == "not_approved"]
+        jobs, skipped = posts.plan(conn, service_id, folder, chosen, platforms,
+                                   assume_approved=set(to_approve))
+    for sk in skipped:
+        title = sk["entry"]["title"]
+        if sk["kind"] == "not_approved":
+            print(f"  not approved: {title} — {sk['reason']}. Approve it first: "
+                  f"sermon-shorts approve {sk['n']} (or publish --approve)")
+        elif sk["kind"] == "already":
+            print(f"  already on {sk['platform']}: {title} — {sk['reason']}")
+        else:
+            print(f"  too long for Instagram's API ({sk['reason']}) — post it from the "
+                  f"Instagram app, then: sermon-shorts mark-posted {sk['n']} instagram --url URL")
     if not jobs:
         print("Nothing new to post.")
         return 0
 
+    if to_approve:
+        names = ", ".join(clips[n - 1]["title"] for n in to_approve)
+        print(f"\nWill record your approval ({actor.login}) of: {names}")
     print("\nAbout to post PUBLICLY:")
-    for clip, _, _, platform in jobs:
-        print(f"  {platform:<9} {clip['title']}")
+    for job in jobs:
+        print(f"  {job['platform']:<9} {job['entry']['title']}")
     if args.dry_run:
         print("(dry run — nothing posted)")
         return 0
@@ -406,18 +435,46 @@ def main(argv: list[str]) -> int:
             print("Cancelled.")
             return 1
 
-    failed = 0
-    for clip, mp4, jpg, platform in jobs:
-        print(f"\n{platform}: {clip['title']}")
-        try:
-            post_id, url = PUBLISHERS[platform](clip, mp4, jpg)
-        except PublishError as e:
-            failed += 1
-            print(f"    FAILED: {e}")
-            continue
-        _record(folder, ledger, clip["file"], platform, post_id, url)
-        print(f"    posted: {url}")
+    if to_approve:
+        for n in to_approve:
+            review.decide(conn, user, folder, n, "approve",
+                          note=args.note or "approved while publishing (publish --approve)")
+        # Re-plan from the recorded decisions: what goes out is what the gate allows.
+        jobs, _ = posts.plan(conn, service_id, folder, chosen, platforms)
 
+    results = post_jobs(conn, actor, service_id, folder, jobs)
+    failed = sum(1 for r in results if r["error"])
     print(f"\nDone — {len(jobs) - failed} posted, {failed} failed "
           f"(record in {folder / LEDGER})")
     return 1 if failed else 0
+
+
+def post_jobs(conn, actor: Actor, service_id: str, folder: Path, jobs: list[dict],
+              say=print) -> list[dict]:
+    """Post planned jobs (from posts.plan, already through the gate), recording
+    each one in published.json and the database as it goes. Shared by this
+    command and the web API. Returns one result per job."""
+    ledger = posts.load_ledger(folder)
+    results = []
+    for job in jobs:
+        clip, platform = job["entry"], job["platform"]
+        mp4 = folder / clip["file"]
+        jpg = mp4.with_suffix(".jpg")
+        say(f"\n{platform}: {clip['title']}")
+        result = {"n": job["n"], "file": clip["file"], "title": clip["title"],
+                  "platform": platform, "url": None, "cover": None, "error": None}
+        try:
+            post_id, url, cover = PUBLISHERS[platform](clip, mp4, jpg if jpg.exists() else None)
+        except PublishError as e:
+            say(f"    FAILED: {e}")
+            posts.record_failure(conn, actor, service_id, clip["file"], platform, str(e))
+            results.append({**result, "error": str(e)})
+            continue
+        posts.write_ledger_entry(folder, ledger, clip["file"], platform, {
+            "id": post_id, "url": url, "at": datetime.now().isoformat(timespec="seconds"),
+            "by": actor.login})
+        posts.record_post(conn, actor, service_id, clip["file"], platform, post_id, url,
+                          job["fingerprint"], cover=cover)
+        say(f"    posted: {url}")
+        results.append({**result, "url": url, "cover": cover})
+    return results
