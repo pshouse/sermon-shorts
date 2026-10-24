@@ -159,3 +159,4 @@ th:first-child, td:first-child { padding-left: 0; }
 .mono-title { font-family: var(--mono); font-size: 22px; font-weight: 500; overflow-wrap: anywhere; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .nowrap { white-space: nowrap; }
+.warn-note { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); }
