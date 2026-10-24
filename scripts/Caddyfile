@@ -2,7 +2,11 @@
 # app's API, and the rendered clips next to it at the same URLs as before.
 # Run by the `clips` sprite service; see scripts/sprite_setup.sh.
 :8080 {
-	# python -m sermon_shorts serve, listening on localhost only.
+	# python -m sermon_shorts serve, listening on localhost only: the API
+	# and the review app it serves at /app/.
+	handle /app* {
+		reverse_proxy 127.0.0.1:8000
+	}
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8000 {
 			# Pass run progress (server-sent events) through as it happens.

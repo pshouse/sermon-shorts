@@ -220,13 +220,19 @@ def db_path() -> Path:
     return Path(os.environ.get(DB_ENV) or PROJECT_DIR / DB_NAME).expanduser()
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    """Open (creating if needed) the store, with the schema in place."""
+def connect(path: Path | None = None, any_thread: bool = False) -> sqlite3.Connection:
+    """Open (creating if needed) the store, with the schema in place.
+
+    `any_thread`: the API's per-request connection may be opened and closed on
+    different worker threads (FastAPI runs a dependency's setup and teardown
+    separately), which sqlite3 refuses by default. It is still used by one
+    request at a time, never shared."""
     path = path or db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # isolation_level=None: we open transactions ourselves (see `write`), so a
     # state change and its audit event always commit together.
-    conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+    conn = sqlite3.connect(path, isolation_level=None, timeout=30,
+                           check_same_thread=not any_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")  # the API reads while the CLI writes
