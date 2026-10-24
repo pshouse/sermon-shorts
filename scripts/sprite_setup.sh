@@ -20,7 +20,9 @@ echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select t
 sudo apt-get -qq update
 sudo DEBIAN_FRONTEND=noninteractive apt-get -qq install -y \
     libxcb1 libgl1 libglib2.0-0 fontconfig ttf-mscorefonts-installer caddy >/dev/null
-fc-list | grep -qi "arial black" || { echo "Arial Black did not install"; exit 1; }
+# grep without -q: -q exits at the first match, fc-list then dies of SIGPIPE
+# mid-list, and pipefail reports the font as missing even though it was found.
+fc-list | grep -i "arial black" >/dev/null || { echo "Arial Black did not install"; exit 1; }
 
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
@@ -38,7 +40,7 @@ chmod +x scripts/*.sh
 
 # The review app's API (python -m sermon_shorts serve), on localhost only:
 # Caddy below is the only thing that reaches it.
-sprite-env services list | grep -q '"name":"api"' || sprite-env services create api \
+sprite-env services list | grep '"name":"api"' >/dev/null || sprite-env services create api \
     --cmd /bin/bash --args "-lc,cd $DIR && exec .venv/bin/python -m sermon_shorts serve" \
     --no-stream
 
@@ -46,11 +48,11 @@ sprite-env services list | grep -q '"name":"api"' || sprite-env services create 
 # else the rendered clips, read-only. Caddy rather than python -m http.server:
 # iOS won't play an MP4 without byte-range support. The config is
 # scripts/Caddyfile, so a git pull plus a service restart picks up changes.
-if ! sprite-env services list | grep -q '"name":"clips"'; then
+if ! sprite-env services list | grep '"name":"clips"' >/dev/null; then
     sprite-env services create clips \
         --cmd /usr/bin/caddy --args "run,--config,$DIR/scripts/Caddyfile,--adapter,caddyfile" \
         --http-port 8080 --no-stream
-elif ! sprite-env services list | grep -q 'Caddyfile'; then
+elif ! sprite-env services list | grep 'Caddyfile' >/dev/null; then
     # Sprites made before the API ran a bare file server with no /api route.
     echo "NOTE: the 'clips' service is the old plain file server, so /api/* isn't routed."
     echo "      Remove it (see: sprite-env services --help) and re-run this script."
