@@ -388,26 +388,44 @@ async function pageReview(r) {
         c.note ? h('p', { class: 'muted small', text: c.note }) : null))))
       : null);
 
-  const noteBox = h('textarea', { id: 'decision-note', rows: '2', placeholder: 'For the record, e.g. checked the verse reference' });
+  const noteBox = h('textarea', { id: 'decision-note', rows: '2', placeholder: clip.review_state === 'approved'
+    ? 'e.g. wrong verse on screen' : 'For the record, e.g. checked the verse reference' });
   const err = h('p', { class: 'error', role: 'alert' });
+  // Offer only the decisions that change something: an approved clip can be
+  // withdrawn, a rejected one approved again, anything else either way.
+  const approved = clip.review_state === 'approved';
+  const rejected = clip.review_state === 'rejected';
+  const liveOn = PLATFORMS.filter((p) => clip.posts[p]).map((p) => PLATFORM_NAMES[p]);
+  const liveText = liveOn.join(liveOn.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1');
   const decide = (decision) => (e) => {
     const note = noteBox.value.trim();
-    if (decision === 'reject' && !note) { err.textContent = 'Say why before rejecting.'; noteBox.focus(); return; }
+    if (decision === 'reject' && !note) {
+      err.textContent = approved ? 'Say why you are withdrawing the approval.' : 'Say why before rejecting.';
+      noteBox.focus();
+      return;
+    }
+    if (decision === 'reject' && liveOn.length &&
+        !confirm(`${clip.title} stays posted on ${liveText}. Withdrawing only stops further posting. Withdraw the approval?`)) return;
     act(e.currentTarget, () => api(`/services/${encodeURIComponent(sid)}/clips/${encodeURIComponent(clip.file)}/decisions`,
       { method: 'POST', body: { decision, note, fingerprint: clip.fingerprint } }),
-    { done: decision === 'approve' ? 'Approved.' : 'Rejected.' });
+    { done: decision === 'approve' ? 'Approved.' : approved ? 'Approval withdrawn.' : 'Rejected.' });
   };
+  const decisionButtons = [
+    rejected || !approved ? h('button', { class: 'btn primary', onclick: decide('approve'), text: rejected ? 'Approve instead' : 'Approve' }) : null,
+    !rejected ? h('button', { class: 'btn', onclick: decide('reject'), text: approved ? 'Withdraw approval' : 'Reject' }) : null,
+  ];
   const decisionPanel = h('div', { class: 'panel' },
     h('div', { class: 'card-head' }, pill(STATE_TEXT[clip.review_state], STATE_TONE[clip.review_state]),
       reviewLine(clip) ? h('span', { class: 'small', text: reviewLine(clip) }) : null),
     h('p', { class: 'muted small' }, 'A decision covers ', h('span', { class: 'mono', text: clip.file }),
       ' exactly as it is now: video, cover, title and description. Any change afterwards needs a new decision.'),
     can('approve') ? [
-      h('label', { for: 'decision-note' }, 'Note for the record ', h('span', { class: 'muted', text: '(required to reject)' })),
+      approved && liveOn.length ? h('p', { class: 'small warn-note', text:
+        `Already posted on ${liveText}. Withdrawing the approval stops any further posting, but those posts stay up: take them down in each app if they need to go.` }) : null,
+      h('label', { for: 'decision-note' }, approved ? 'Why ' : 'Note for the record ',
+        h('span', { class: 'muted', text: approved ? '(required to withdraw)' : rejected ? '(optional)' : '(required to reject)' })),
       noteBox, err,
-      h('div', { class: 'actions' },
-        h('button', { class: 'btn primary', onclick: decide('approve'), text: 'Approve' }),
-        h('button', { class: 'btn', onclick: decide('reject'), text: 'Reject' }))]
+      h('div', { class: 'actions' }, decisionButtons)]
       : h('p', { class: 'muted small', text: `As a ${state.me.role} you can watch and leave notes; approving needs an approver.` }));
 
   const noteInput = h('textarea', { id: 'note-text', rows: '2', placeholder: 'A note for whoever approves' });
