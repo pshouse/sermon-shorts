@@ -163,8 +163,11 @@ th:first-child, td:first-child { padding-left: 0; }
 
 .footer { max-width: 1200px; margin: 0 auto; padding: 0 24px 32px; font-size: 13px; color: var(--muted); }
 .footer a { color: var(--muted); }
-.notice { max-width: 1200px; margin: 16px auto 0; padding: 12px 24px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; font-size: 14px; }
+.notice { max-width: 1152px; margin: 16px auto 0; padding: 12px 24px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; font-size: 14px; }
 @media (max-width: 1248px) { .notice { margin-left: 24px; margin-right: 24px; } }
 .right { align-items: flex-end; }
 .field .btn { align-self: flex-start; }
 .row.bottom { align-items: flex-end; }
+.notice p { margin: 0 0 8px; }
+.notice-cmd { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.notice-cmd code { flex: 1 1 320px; color: var(--ink); }

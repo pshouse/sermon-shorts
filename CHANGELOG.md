@@ -8,6 +8,10 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+### Changed
+- The Studio's "Restart needed" notice gives the exact command to copy, with
+  the dependency install step when `requirements.txt` changed too.
+
 ## [0.2.0] - 2026-10-25
 
 Everything since the first release, which kept the 0.1.0 number until
