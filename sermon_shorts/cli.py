@@ -11,7 +11,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from . import __version__
 from .transcribe import (transcribe, transcript_as_text, snap_to_sentences,
                          cut_windows, words_in_range, save_shifted_transcript,
                          locate_quote, END_PAD)
@@ -182,7 +181,8 @@ def _pipeline(argv: list[str]) -> int:
                              "already exist, so it's safe to run on a schedule")
     parser.add_argument("--force", action="store_true",
                         help="with --weekly: redo the service even if its clips already exist")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    from .core.version import label
+    parser.add_argument("--version", action="version", version=f"%(prog)s {label()}")
     args = parser.parse_args(argv)
 
     if runs.current() is None:

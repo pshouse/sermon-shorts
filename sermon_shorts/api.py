@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .core import audit, posts, records, review, runs, users
+from .core import audit, posts, records, review, runs, users, version
 from .core.audit import Actor
 from .core.db import PROJECT_DIR, SCHEMA_VERSION, connect, write
 from .core.posts import PLATFORMS
@@ -381,9 +381,29 @@ def create_app() -> FastAPI:
 
     # -- session --
 
+    running = {**version.info(), "started_at": audit.now()}
+    disk_cache: dict = {"at": 0.0, "value": None}
+
+    def on_disk() -> dict:
+        """The checkout now, and whether this process is behind it. Cached a
+        little: every Studio page load asks."""
+        if time.monotonic() - disk_cache["at"] > 30:
+            now_commit = version.commit()
+            changed = (version.python_changed_since(running["commit"])
+                       if running["commit"] and now_commit and now_commit != running["commit"]
+                       else [])
+            disk_cache.update(at=time.monotonic(), value={
+                "version": version.version_on_disk(), "commit": now_commit,
+                # Web files are read per request; only Python needs a restart.
+                "restart_needed": bool(changed), "changed_files": changed or []})
+        return disk_cache["value"]
+
     @app.get(f"{v1}/health")
     def health():
-        return {"ok": True, "version": __version__, "schema": SCHEMA_VERSION}
+        return {"ok": True, "version": running["version"], "commit": running["commit"],
+                "dirty": running["dirty"], "label": version.label(running),
+                "started_at": running["started_at"], "schema": SCHEMA_VERSION,
+                "on_disk": on_disk()}
 
     @app.post(f"{v1}/session")
     def sign_in(body: SessionIn, response: Response, conn=Depends(get_conn)):

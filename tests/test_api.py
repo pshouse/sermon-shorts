@@ -95,6 +95,14 @@ class ApiTest(unittest.TestCase):
 
     # --- signing in ---
 
+    def test_health_reports_the_running_code(self):
+        from sermon_shorts import __version__
+        h = self.client.get("/api/v1/health").json()
+        self.assertEqual(h["version"], __version__)
+        self.assertTrue(h["label"].startswith(__version__))
+        self.assertEqual(h["on_disk"]["version"], __version__)
+        self.assertFalse(h["on_disk"]["restart_needed"])  # nothing changed since it started
+
     def test_everything_but_health_needs_a_token(self):
         self.assertEqual(self.client.get("/api/v1/health").status_code, 200)
         r = self.client.get("/api/v1/services")

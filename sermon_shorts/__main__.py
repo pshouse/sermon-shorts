@@ -1,5 +1,10 @@
 import sys
 
+if len(sys.argv) > 1 and sys.argv[1] in ("--version", "version"):
+    from .core.version import label
+    print(f"sermon-shorts {label()}")
+    raise SystemExit(0)
+
 # Account and audit commands need only the standard library, so dispatch them
 # before importing the pipeline (OpenCV, numpy, ffmpeg...).
 if len(sys.argv) > 1 and sys.argv[1] in ("users", "audit"):

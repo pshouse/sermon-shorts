@@ -20,7 +20,7 @@ import socket
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from . import audit, users
+from . import audit, users, version
 from .audit import Actor
 from .db import connect, write
 
@@ -127,12 +127,15 @@ def begin(kind: str, argv: list[str]) -> Run:
     actor = _starter(conn)
     try:
         with write(conn):
+            code = version.info()
             conn.execute(
                 "INSERT INTO runs (id, kind, args, status, started_at, started_by, via, "
-                "github_run_id, log_path, pid, host) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)",
+                "github_run_id, log_path, pid, host, code_version, code_commit) "
+                "VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, kind, json.dumps(argv), audit.now(), actor.login, actor.via,
                  os.environ.get(GITHUB_RUN_ENV), os.environ.get(LOG_ENV), os.getpid(),
-                 socket.gethostname()))
+                 socket.gethostname(), code["version"],
+                 (code["commit"] or "") + ("+modified" if code["dirty"] else "") or None))
     except sqlite3.IntegrityError:
         other = conn.execute("SELECT * FROM runs WHERE status = 'running'").fetchone()
         conn.close()
@@ -166,7 +169,7 @@ def end(rc: int | None = None, error: str | None = None) -> None:
             audit.record(run.conn, run.actor,
                          "run.finished" if status == "succeeded" else "run.failed",
                          service=run.service_id, run=run.id, kind=run.kind,
-                         outcome=run.outcome, error=error)
+                         outcome=run.outcome, error=error, code=version.label())
     run.conn.close()
 
 

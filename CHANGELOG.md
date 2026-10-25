@@ -1,0 +1,70 @@
+# Changelog
+
+All notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org/):
+MAJOR for changes that break existing commands, API clients or stored data,
+MINOR for new features, PATCH for fixes. The version lives in
+`sermon_shorts/__init__.py`; `sermon-shorts --version`, the API's
+`/api/v1/health` and the Studio's footer show it with the git commit.
+
+## [Unreleased]
+
+## [0.2.0] - 2026-10-25
+
+Everything since the first release, which kept the 0.1.0 number until
+versions were tracked.
+
+### Added
+- **The Studio** (`/app/`): a review web app for watching, approving and
+  posting clips, with live run progress, the audit log and people
+  management. Approved clips offer only "Withdraw approval", with a warning
+  when the clip is already posted.
+- **HTTP API** (`sermon-shorts serve`) behind the Studio: token or cookie
+  sign-in, fingerprint-checked decisions, preview-then-post publishing,
+  starting and cancelling runs, CSV export of the audit log.
+- **Accounts and roles**: a root owner created once, then invite-only
+  reviewers, approvers and owners (`sermon-shorts users`).
+- **Approval gate**: `publish` posts only clips a named approver approved
+  exactly as they are on disk; `approve`, `reject`, `note`, `mark-posted`
+  and `retry-cover` commands.
+- **Audit log**: append-only and hash-chained, with `sermon-shorts audit
+  --verify`; every run, decision, post and account change is recorded.
+- **Run records**: each run's steps, timings, starter and outcome; every
+  candidate clip with Claude's verdict and note; `services` and `runs`
+  commands.
+- **Version tracking**: this changelog, the version and commit recorded on
+  every run, and a Studio notice when the server needs a restart to load
+  newer code.
+- **Publishing** to YouTube Shorts, Instagram Reels and Facebook Reels
+  (`publish`), with a ledger so nothing posts twice.
+- **Fly.io sprite** hosting: the weekly run started by a GitHub Actions
+  schedule, and the clips served for review.
+- **Subsplash**: `--latest` fetches the newest service; `--weekly` runs the
+  whole Sunday routine and skips services already done.
+- **Jev** as an alternative sermon finder (`--labeler jev`).
+- Designed cover thumbnails, a re-based transcript for `--sermon-only`,
+  automatic caption placement from the speaker's face.
+
+### Changed
+- Clips are cut on whole ideas: quote-anchored cuts and a second,
+  stranger's-eye review of each candidate, on Fable 5.1.
+- Speaker tracking with YuNet, cuts on real pauses, two-pass audio leveling.
+- Clip bounds snap to sentence boundaries, with bounded drift.
+
+### Fixed
+- Sprite setup no longer reports Arial Black missing when it is installed.
+- An API request could fail when its database connection was closed on a
+  different thread.
+- One unpunctuated stretch of transcript no longer derails the sermon cut.
+- A service counts as done by its date, so a re-uploaded video isn't
+  processed twice.
+
+## [0.1.0] - 2026-07-12
+
+### Added
+- First release: a church service recording in, vertical (1080x1920)
+  captioned clips out, with the moments chosen by Claude; `--sermon-only`
+  trimming, a church profile, and `--speaker`.
+
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/pshouse/sermon-shorts/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/pshouse/sermon-shorts/releases/tag/v0.1.0

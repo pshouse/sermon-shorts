@@ -7,6 +7,7 @@
 'use strict';
 
 const API = '/api/v1';
+const REPO = 'https://github.com/pshouse/sermon-shorts';
 const PLATFORMS = ['youtube', 'facebook', 'instagram'];
 const PLATFORM_NAMES = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram' };
 const STEP_NAMES = {
@@ -177,6 +178,7 @@ async function render() {
     if (!state.me) { renderTopbar(r.page); return go('#/signin'); }
   }
   renderTopbar(r.page);
+  refreshVersion();
   try {
     const content = await page(r);
     if (seq !== state.renderSeq || !content) return;  // a newer navigation won, or it redirected
@@ -186,6 +188,30 @@ async function render() {
     setMain(h('div', { class: 'card' }, h('h2', { text: "Couldn't load this page" }),
       h('p', { class: 'muted', text: e.message })));
   }
+}
+
+// --- what's running ---------------------------------------------------------
+
+async function refreshVersion() {
+  if (!state.health || Date.now() - state.healthAt > 60000) {
+    try { state.health = await api('/health', { allow401: true }); state.healthAt = Date.now(); }
+    catch { return; }
+  }
+  const v = state.health;
+  const link = (href, text, cls) => h('a', { href, target: '_blank', rel: 'noopener noreferrer', class: cls, text });
+  document.getElementById('footer').replaceChildren(
+    h('span', { text: `Sermon Shorts ${v.version}` }),
+    v.commit ? [' · ', link(`${REPO}/commit/${v.commit}`, v.commit + (v.dirty ? ' (modified)' : ''), 'mono')] : null,
+    ' · ', link(`${REPO}/blob/main/CHANGELOG.md`, "What's new"));
+  // Owners run the server: tell them when it's behind the code on disk.
+  const disk = v.on_disk || {};
+  const behind = can('run') && disk.restart_needed;
+  document.getElementById('notice').replaceChildren(behind ? h('div', { class: 'notice' },
+    h('strong', { text: 'Restart needed. ' }),
+    `The server is running ${v.label}, but newer code is on the sprite ` +
+    `(${disk.version && disk.version !== v.version ? `${disk.version}, ` : ''}${disk.commit}) that changes ` +
+    `${disk.changed_files.length} Python file${disk.changed_files.length === 1 ? '' : 's'}. ` +
+    'Restart the api service on the sprite to load it.') : '');
 }
 
 function renderTopbar(page) {
@@ -643,6 +669,8 @@ async function pageRun(r) {
         } }) : null)),
     run.error ? h('div', { class: 'card tight' }, h('p', { class: 'error', text: run.error })) : null,
     run.outcome ? h('p', { text: run.outcome }) : null,
+    run.code_version ? h('p', { class: 'muted small', text: `Made by Sermon Shorts ${run.code_version}` +
+      (run.code_commit ? ` (${run.code_commit})` : '') }) : null,
     run.service_id ? h('p', {}, h('a', { href: `#/week/${encodeURIComponent(run.service_id)}`, text: 'Open the service' })) : null,
     h('section', { class: 'card' }, h('h2', { text: 'Steps' }), steps),
     h('section', { class: 'card' }, h('h2', { text: 'Log' }), logBox));
@@ -663,19 +691,21 @@ async function pageHistory(r) {
     h('td', { text: run.github ? `${run.started_by} (GitHub)` : run.started_by || '-' }),
     h('td', {}, pill(run.status, RUN_TONE[run.status])),
     h('td', { class: 'mono', text: took(run.started_at, run.finished_at) || '-' }),
-    h('td', { text: run.error || run.outcome || '' })));
+    h('td', { text: run.error || run.outcome || '' }),
+    h('td', { class: 'mono nowrap', text: run.code_version || '-' })));
   const ghRows = runsResp.github_only.map((g) => h('tr', {},
     h('td', {}, h('a', { href: g.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono', text: `GitHub ${g.github_run_id}` })),
     h('td', { text: when(g.created_at) }), h('td', { text: g.event === 'schedule' ? 'schedule' : g.actor || '-' }),
     h('td', {}, pill(g.conclusion || g.status, g.conclusion === 'failure' ? 'bad' : '')),
-    h('td', { text: '-' }), h('td', { text: g.conclusion === 'failure' ? 'Failed before reaching the sprite' : 'Never reached the sprite' })));
+    h('td', { text: '-' }), h('td', { text: g.conclusion === 'failure' ? 'Failed before reaching the sprite' : 'Never reached the sprite' }),
+    h('td', { text: '-' })));
 
   return h('div', { class: 'page-body' },
     h('div', { class: 'head-text' }, h('h1', { text: 'History and audit log' }),
       h('span', { class: 'muted', text: 'Every run, decision and post, with who did it and when.' })),
     h('section', { class: 'card' }, h('h2', { text: 'Runs' }),
       runRows.length || ghRows.length ? h('div', { class: 'table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Run', 'Started', 'By', 'Result', 'Took', 'Outcome'].map((t) => h('th', { scope: 'col', text: t })))),
+        h('thead', {}, h('tr', {}, ['Run', 'Started', 'By', 'Result', 'Took', 'Outcome', 'Version'].map((t) => h('th', { scope: 'col', text: t })))),
         h('tbody', {}, runRows, ghRows))) : h('p', { class: 'muted', text: 'No runs recorded yet.' })),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },

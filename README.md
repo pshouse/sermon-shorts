@@ -382,6 +382,15 @@ To try it on your own machine without Caddy:
 http://127.0.0.1:8000/app/ (add `SERMON_SHORTS_INSECURE_COOKIE=1` to sign in
 over plain http).
 
+### Versions
+
+`python -m sermon_shorts --version` prints the version and the git commit,
+e.g. `sermon-shorts 0.2.0 (39d0a25)`. The Studio shows the same in its footer
+(with a link to [CHANGELOG.md](CHANGELOG.md)), every run records the version
+that made it, and owners see a "Restart needed" notice when new Python code
+has been pulled onto the sprite but the `api` service is still running the
+old code.
+
 ### The review app's API
 
 `python -m sermon_shorts serve` runs the API the review web app talks to

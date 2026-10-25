@@ -201,6 +201,8 @@ def runs_main(argv: list[str]) -> int:
             return 0
         print(f"{run['id']}: {run['kind']} {run['status']}, started {_when(run['started_at'])} "
               f"by {run['started_by']} ({run['via']}), took {_took(run['started_at'], run['finished_at'])}")
+        if run.get("code_version"):
+            print(f"  code: {run['code_version']}" + (f" ({run['code_commit']})" if run.get("code_commit") else ""))
         for key in ("service_id", "outcome", "error", "github_run_id", "log_path"):
             if run[key]:
                 print(f"  {key.replace('_', ' ')}: {run[key]}")

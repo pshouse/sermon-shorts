@@ -17,7 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_ENV = "SERMON_SHORTS_DB"
 DB_NAME = "sermon_shorts.db"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE users (
@@ -213,7 +213,14 @@ CREATE TABLE posts (
 );
 """
 
-MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3}
+# v4: which code produced each run (core/version.py), for tracing a clip back
+# to the release and commit that rendered it.
+_SCHEMA_V4 = """
+ALTER TABLE runs ADD COLUMN code_version TEXT;
+ALTER TABLE runs ADD COLUMN code_commit TEXT;
+"""
+
+MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4}
 
 
 def db_path() -> Path:
