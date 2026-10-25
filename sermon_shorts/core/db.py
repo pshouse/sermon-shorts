@@ -17,7 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_ENV = "SERMON_SHORTS_DB"
 DB_NAME = "sermon_shorts.db"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 _SCHEMA_V1 = """
 CREATE TABLE users (
@@ -213,7 +213,31 @@ CREATE TABLE posts (
 );
 """
 
-MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3}
+# v4: which code produced each run (core/version.py), for tracing a clip back
+# to the release and commit that rendered it.
+_SCHEMA_V4 = """
+ALTER TABLE runs ADD COLUMN code_version TEXT;
+ALTER TABLE runs ADD COLUMN code_commit TEXT;
+"""
+
+# v5: owners' controls over the Sunday schedule (core/schedule.py).
+_SCHEMA_V5 = """
+CREATE TABLE schedule_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),   -- one row
+    paused     INTEGER NOT NULL DEFAULT 0,
+    reason     TEXT NOT NULL DEFAULT '',
+    changed_by TEXT,
+    changed_at TEXT
+);
+CREATE TABLE schedule_skips (
+    date     TEXT PRIMARY KEY,                     -- YYYY-MM-DD in the church's timezone
+    reason   TEXT NOT NULL DEFAULT '',
+    by_login TEXT NOT NULL,
+    at       TEXT NOT NULL
+);
+"""
+
+MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4, 5: _SCHEMA_V5}
 
 
 def db_path() -> Path:

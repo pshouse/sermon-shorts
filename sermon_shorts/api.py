@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .core import audit, posts, records, review, runs, users
+from .core import audit, posts, records, review, runs, schedule, users, version
 from .core.audit import Actor
 from .core.db import PROJECT_DIR, SCHEMA_VERSION, connect, write
 from .core.posts import PLATFORMS
@@ -342,6 +342,15 @@ class ManualPostIn(BaseModel):
     note: str = ""
 
 
+class PauseIn(BaseModel):
+    reason: str = ""
+
+
+class SkipIn(BaseModel):
+    date: str = Field(..., description="YYYY-MM-DD, in the church's timezone")
+    reason: str = ""
+
+
 class RunIn(BaseModel):
     kind: Literal["weekly"] = "weekly"
     labeler: Literal["claude", "jev"] = "claude"
@@ -381,9 +390,29 @@ def create_app() -> FastAPI:
 
     # -- session --
 
+    running = {**version.info(), "started_at": audit.now()}
+    disk_cache: dict = {"at": 0.0, "value": None}
+
+    def on_disk() -> dict:
+        """The checkout now, and whether this process is behind it. Cached a
+        little: every Studio page load asks."""
+        if time.monotonic() - disk_cache["at"] > 30:
+            now_commit = version.commit()
+            changed = (version.python_changed_since(running["commit"])
+                       if running["commit"] and now_commit and now_commit != running["commit"]
+                       else [])
+            disk_cache.update(at=time.monotonic(), value={
+                "version": version.version_on_disk(), "commit": now_commit,
+                # Web files are read per request; only Python needs a restart.
+                "restart_needed": bool(changed), "changed_files": changed or []})
+        return disk_cache["value"]
+
     @app.get(f"{v1}/health")
     def health():
-        return {"ok": True, "version": __version__, "schema": SCHEMA_VERSION}
+        return {"ok": True, "version": running["version"], "commit": running["commit"],
+                "dirty": running["dirty"], "label": version.label(running),
+                "started_at": running["started_at"], "schema": SCHEMA_VERSION,
+                "on_disk": on_disk()}
 
     @app.post(f"{v1}/session")
     def sign_in(body: SessionIn, response: Response, conn=Depends(get_conn)):
@@ -705,6 +734,44 @@ def create_app() -> FastAPI:
             audit.record(conn, _actor(user), "run.cancel_requested", run=run_id,
                          service=run.get("service_id"))
         return {"ok": True}
+
+    # -- the Sunday schedule --
+
+    def sched(fn):
+        try:
+            return fn()
+        except schedule.ScheduleError as e:
+            raise ApiError(400, "not_allowed", str(e))
+
+    @app.get(f"{v1}/schedule")
+    def get_schedule(user: User = Depends(need("view")), conn=Depends(get_conn)):
+        recent = [r for r in runs.list_runs(conn, 200)
+                  if r["started_by"] == schedule.SCHEDULE_STARTER][:12]
+        missed = [{**g, "reached_sprite": False} for g in _github_runs()
+                  if g["event"] == "schedule"
+                  and not conn.execute("SELECT 1 FROM runs WHERE github_run_id = ?",
+                                       (g["github_run_id"],)).fetchone()]
+        return {**schedule.overview(conn), "recent": recent, "never_reached_sprite": missed}
+
+    @app.post(f"{v1}/schedule/pause")
+    def pause_schedule(body: PauseIn, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.set_paused(conn, user, True, body.reason, via="web"))
+        return schedule.overview(conn)
+
+    @app.post(f"{v1}/schedule/resume")
+    def resume_schedule(user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.set_paused(conn, user, False, via="web"))
+        return schedule.overview(conn)
+
+    @app.post(f"{v1}/schedule/skips", status_code=201)
+    def skip_date(body: SkipIn, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.skip(conn, user, body.date, body.reason, via="web"))
+        return schedule.overview(conn)
+
+    @app.delete(f"{v1}/schedule/skips/{{day}}")
+    def unskip_date(day: str, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.unskip(conn, user, day, via="web"))
+        return schedule.overview(conn)
 
     # -- audit --
 

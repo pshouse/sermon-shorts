@@ -7,6 +7,7 @@
 'use strict';
 
 const API = '/api/v1';
+const REPO = 'https://github.com/pshouse/sermon-shorts';
 const PLATFORMS = ['youtube', 'facebook', 'instagram'];
 const PLATFORM_NAMES = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram' };
 const STEP_NAMES = {
@@ -170,13 +171,14 @@ async function render() {
   state.cleanup = [];
   const r = route();
   const pages = { week: pageWeek, review: pageReview, publish: pagePublish, history: pageHistory,
-    runs: pageRun, people: pagePeople, signin: pageSignIn, join: pageJoin };
+    runs: pageRun, people: pagePeople, schedule: pageSchedule, signin: pageSignIn, join: pageJoin };
   const page = pages[r.page] || pageWeek;
   if (!state.me && page !== pageSignIn && page !== pageJoin) {
     try { state.me = await api('/me', { allow401: true }); } catch { state.me = null; }
     if (!state.me) { renderTopbar(r.page); return go('#/signin'); }
   }
   renderTopbar(r.page);
+  refreshVersion();
   try {
     const content = await page(r);
     if (seq !== state.renderSeq || !content) return;  // a newer navigation won, or it redirected
@@ -186,6 +188,31 @@ async function render() {
     setMain(h('div', { class: 'card' }, h('h2', { text: "Couldn't load this page" }),
       h('p', { class: 'muted', text: e.message })));
   }
+}
+
+// --- what's running ---------------------------------------------------------
+
+async function refreshVersion() {
+  if (!state.health || Date.now() - state.healthAt > 60000) {
+    try { state.health = await api('/health', { allow401: true }); state.healthAt = Date.now(); }
+    catch { return; }
+  }
+  const v = state.health;
+  const link = (href, text, cls) => h('a', { href, target: '_blank', rel: 'noopener noreferrer', class: cls, text });
+  // Through h(), which flattens and skips nulls; replaceChildren() alone would not.
+  document.getElementById('footer').replaceChildren(h('span', {},
+    `Sermon Shorts ${v.version}`,
+    v.commit ? [' · ', link(`${REPO}/commit/${v.commit}`, v.commit + (v.dirty ? ' (modified)' : ''), 'mono')] : null,
+    ' · ', link(`${REPO}/blob/main/CHANGELOG.md`, "What's new")));
+  // Owners run the server: tell them when it's behind the code on disk.
+  const disk = v.on_disk || {};
+  const behind = can('run') && disk.restart_needed;
+  document.getElementById('notice').replaceChildren(behind ? h('div', { class: 'notice' },
+    h('strong', { text: 'Restart needed. ' }),
+    `The server is running ${v.label}, but newer code is on the sprite ` +
+    `(${disk.version && disk.version !== v.version ? `${disk.version}, ` : ''}${disk.commit}) that changes ` +
+    `${disk.changed_files.length} Python file${disk.changed_files.length === 1 ? '' : 's'}. ` +
+    'Restart the api service on the sprite to load it.') : '');
 }
 
 function renderTopbar(page) {
@@ -201,6 +228,7 @@ function renderTopbar(page) {
     h('nav', { class: 'nav', 'aria-label': 'Main' },
       link('#/', 'This week', 'week'), link('#/review', 'Review', 'review'),
       link('#/publish', 'Publish', 'publish'), link('#/history', 'History & audit', 'history'),
+      link('#/schedule', 'Schedule', 'schedule'),
       link('#/people', 'People', 'people')),
     h('div', { class: 'me' },
       h('span', { class: 'avatar', 'aria-hidden': 'true', text: initials }),
@@ -312,6 +340,11 @@ async function pageWeek(r) {
   const svc = await api(`/services/${encodeURIComponent(sid)}`);
   const cands = await api(`/services/${encodeURIComponent(sid)}/candidates`);
   const run = svc.latest_run ? await api(`/runs/${encodeURIComponent(svc.latest_run.id)}`) : null;
+  const sched = await api('/schedule');
+  const next = sched.upcoming.find((u) => !u.held_by);
+  const nextLine = h('a', { href: '#/schedule', class: 'muted small' }, sched.paused
+    ? 'Scheduled runs are paused'
+    : next ? `Next scheduled check: ${when(next.first)}` : 'No scheduled runs found');
 
   const approved = svc.clips.filter((c) => c.review_state === 'approved').length;
   const live = svc.clips.reduce((n, c) => n + Object.keys(c.posts).length, 0);
@@ -325,7 +358,8 @@ async function pageWeek(r) {
   }, { refresh: false }), text: 'Run now' }) : null;
 
   return h('div', { class: 'page-body' },
-    serviceHead(svc, null, [serviceSwitcher(services, sid, 'week'), runButton]),
+    serviceHead(svc, null, [serviceSwitcher(services, sid, 'week'),
+      h('div', { class: 'head-text right' }, runButton, nextLine)]),
     h('div', { class: 'stats' },
       h('div', { class: 'stat' }, h('span', { class: 'muted small', text: 'Clips rendered' }),
         h('b', { text: String(svc.clips.length) }),
@@ -480,7 +514,9 @@ const AUDIT_LABELS = {
   'service.imported': 'Service imported', 'user.root_created': 'Root owner created',
   'user.joined': 'Joined', 'user.role_changed': 'Role changed', 'user.removed': 'Removed',
   'invite.created': 'Invited', 'invite.revoked': 'Invite withdrawn', 'token.created': 'Token issued',
-  'token.revoked': 'Token revoked',
+  'token.revoked': 'Token revoked', 'schedule.paused': 'Schedule paused',
+  'schedule.resumed': 'Schedule resumed', 'schedule.date_skipped': 'Date skipped',
+  'schedule.skip_removed': 'Skip removed',
 };
 const auditLabel = (action) => AUDIT_LABELS[action] || action;
 function auditDetail(e) {
@@ -643,6 +679,8 @@ async function pageRun(r) {
         } }) : null)),
     run.error ? h('div', { class: 'card tight' }, h('p', { class: 'error', text: run.error })) : null,
     run.outcome ? h('p', { text: run.outcome }) : null,
+    run.code_version ? h('p', { class: 'muted small', text: `Made by Sermon Shorts ${run.code_version}` +
+      (run.code_commit ? ` (${run.code_commit})` : '') }) : null,
     run.service_id ? h('p', {}, h('a', { href: `#/week/${encodeURIComponent(run.service_id)}`, text: 'Open the service' })) : null,
     h('section', { class: 'card' }, h('h2', { text: 'Steps' }), steps),
     h('section', { class: 'card' }, h('h2', { text: 'Log' }), logBox));
@@ -650,7 +688,8 @@ async function pageRun(r) {
 
 // --- History & audit -----------------------------------------------------------
 
-const AUDIT_FILTERS = [['All', ''], ['Approvals', 'clip.'], ['Posts', 'post.'], ['Runs', 'run.'], ['People', 'user.']];
+const AUDIT_FILTERS = [['All', ''], ['Approvals', 'clip.'], ['Posts', 'post.'], ['Runs', 'run.'],
+  ['Schedule', 'schedule.'], ['People', 'user.']];
 
 async function pageHistory(r) {
   const filter = r.query.get('f') || '';
@@ -663,19 +702,21 @@ async function pageHistory(r) {
     h('td', { text: run.github ? `${run.started_by} (GitHub)` : run.started_by || '-' }),
     h('td', {}, pill(run.status, RUN_TONE[run.status])),
     h('td', { class: 'mono', text: took(run.started_at, run.finished_at) || '-' }),
-    h('td', { text: run.error || run.outcome || '' })));
+    h('td', { text: run.error || run.outcome || '' }),
+    h('td', { class: 'mono nowrap', text: run.code_version || '-' })));
   const ghRows = runsResp.github_only.map((g) => h('tr', {},
     h('td', {}, h('a', { href: g.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono', text: `GitHub ${g.github_run_id}` })),
     h('td', { text: when(g.created_at) }), h('td', { text: g.event === 'schedule' ? 'schedule' : g.actor || '-' }),
     h('td', {}, pill(g.conclusion || g.status, g.conclusion === 'failure' ? 'bad' : '')),
-    h('td', { text: '-' }), h('td', { text: g.conclusion === 'failure' ? 'Failed before reaching the sprite' : 'Never reached the sprite' })));
+    h('td', { text: '-' }), h('td', { text: g.conclusion === 'failure' ? 'Failed before reaching the sprite' : 'Never reached the sprite' }),
+    h('td', { text: '-' })));
 
   return h('div', { class: 'page-body' },
     h('div', { class: 'head-text' }, h('h1', { text: 'History and audit log' }),
       h('span', { class: 'muted', text: 'Every run, decision and post, with who did it and when.' })),
     h('section', { class: 'card' }, h('h2', { text: 'Runs' }),
       runRows.length || ghRows.length ? h('div', { class: 'table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Run', 'Started', 'By', 'Result', 'Took', 'Outcome'].map((t) => h('th', { scope: 'col', text: t })))),
+        h('thead', {}, h('tr', {}, ['Run', 'Started', 'By', 'Result', 'Took', 'Outcome', 'Version'].map((t) => h('th', { scope: 'col', text: t })))),
         h('tbody', {}, runRows, ghRows))) : h('p', { class: 'muted', text: 'No runs recorded yet.' })),
     h('section', { class: 'card' },
       h('div', { class: 'card-head' },
@@ -684,8 +725,8 @@ async function pageHistory(r) {
         h('div', { class: 'actions' },
           h('button', { class: 'btn small', text: 'Verify', onclick: (e) => act(e.currentTarget, async () => {
             const v = await api('/audit/verify');
-            verifyOut.replaceChildren(v.ok ? pill(`Intact · ${v.events} events`, 'ok') : pill(`Broken at event ${v.first_bad}: ${v.problem}`, 'bad'),
-              v.ok ? h('span', { class: 'mono muted', text: ` tail ${v.tail.slice(0, 16)}…` }) : null);
+            verifyOut.replaceChildren(h('span', {}, v.ok ? pill(`Intact · ${v.events} events`, 'ok') : pill(`Broken at event ${v.first_bad}: ${v.problem}`, 'bad'),
+              v.ok ? h('span', { class: 'mono muted', text: ` tail ${v.tail.slice(0, 16)}…` }) : null));
           }, { refresh: false }) }),
           h('a', { class: 'btn small', href: `${API}/audit.csv${filter ? `?action=${encodeURIComponent(filter)}` : ''}`, download: 'sermon-shorts-audit.csv', text: 'Export CSV' }))),
       verifyOut,
@@ -700,6 +741,92 @@ async function pageHistory(r) {
           h('td', { class: 'small', text: [e.service, e.clip].filter(Boolean).join(' / ') }),
           h('td', { class: 'small', text: auditDetail(e) }))))))
         : h('p', { class: 'muted', text: 'No entries.' })));
+}
+
+// --- Schedule ------------------------------------------------------------------
+
+const clock = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const zone = (iso) => new Date(iso).toLocaleTimeString(undefined, { timeZoneName: 'short' }).split(' ').pop();
+
+async function pageSchedule() {
+  const s = await api('/schedule');
+  const owner = can('run');
+  const post = (path, body, done) => (e) => act(e.currentTarget, () => api(path, { method: 'POST', body }), { done });
+
+  const reason = h('input', { type: 'text', id: 'pause-reason', placeholder: 'e.g. holiday break' });
+  const status = h('section', { class: 'card', 'aria-labelledby': 'sched-status' },
+    h('div', { class: 'card-head' }, h('h2', { id: 'sched-status', text: 'Scheduled runs' }),
+      s.paused ? pill('Paused', 'warn') : pill('On', 'ok')),
+    s.paused
+      ? h('p', { text: `Paused by ${s.paused_by}, ${when(s.paused_at)}${s.reason ? `: ${s.reason}` : ''}. Nothing runs on its own until resumed.` })
+      : h('p', { class: 'muted', text: 'On each scheduled day the sprite checks Subsplash at every time below and makes clips once the new service is up; later checks that day find it done and stop.' }),
+    owner ? (s.paused
+      ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', text: 'Resume', onclick: post('/schedule/resume', undefined, 'Scheduled runs resumed.') }))
+      : h('div', { class: 'inline-form' }, h('label', { for: 'pause-reason', class: 'sr', text: 'Reason' }), reason,
+        h('button', { class: 'btn', text: 'Pause all', onclick: (e) => post('/schedule/pause', { reason: reason.value }, 'Scheduled runs paused.')(e) })))
+      : null,
+    h('p', { class: 'muted small' }, 'Run now and manual runs always go ahead. The days and times come from ',
+      h('span', { class: 'mono', text: s.workflow }), ` (${s.crons.join(', ') || 'no schedule found'}); changing them means editing that file.`));
+
+  const rows = s.upcoming.map((u) => {
+    const label = new Date(u.first).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const tone = u.held_by ? 'warn' : 'ok';
+    const text = u.held_by === 'paused' ? 'Paused' : u.held_by === 'skipped' ? 'Skipped' : 'Will run';
+    let action = null;
+    if (owner && u.held_by === 'skipped') {
+      action = h('button', { class: 'btn small', text: 'Undo skip', onclick: (e) =>
+        act(e.currentTarget, () => api(`/schedule/skips/${u.date}`, { method: 'DELETE' }), { done: 'Skip removed.' }) });
+    } else if (owner && !u.held_by) {
+      action = h('button', { class: 'btn small', text: 'Skip this day', onclick: (e) => {
+        const why = prompt(`Skip the scheduled run on ${label}? Reason (optional):`, '');
+        if (why === null) return;
+        post('/schedule/skips', { date: u.date, reason: why }, `${label} skipped.`)(e);
+      } });
+    }
+    return h('tr', {},
+      h('td', { class: 'nowrap', text: label }),
+      h('td', { class: 'nowrap', text: `${clock(u.first)} to ${clock(u.last)} ${zone(u.first)}` }),
+      h('td', { text: String(u.checks) }),
+      h('td', {}, pill(text, tone), u.skip && u.skip.reason ? h('span', { class: 'muted small', text: ` ${u.skip.reason}` }) : null),
+      h('td', {}, action));
+  });
+
+  const dateIn = h('input', { type: 'date', id: 'skip-date' });
+  const dateWhy = h('input', { type: 'text', id: 'skip-reason', placeholder: 'Reason (optional)' });
+  const laterSkips = s.skips.filter((k) => !s.upcoming.some((u) => u.date === k.date));
+
+  const recent = s.recent.map((run) => h('tr', {},
+    h('td', {}, h('a', { href: `#/runs/${encodeURIComponent(run.id)}`, class: 'mono', text: run.id })),
+    h('td', { class: 'nowrap', text: when(run.started_at) }),
+    h('td', {}, pill(run.status, RUN_TONE[run.status])),
+    h('td', { text: run.error || run.outcome || '' })));
+  const missed = s.never_reached_sprite.map((g) => h('tr', {},
+    h('td', {}, h('a', { href: g.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono', text: `GitHub ${g.github_run_id}` })),
+    h('td', { class: 'nowrap', text: when(g.created_at) }),
+    h('td', {}, pill(g.conclusion || g.status, g.conclusion === 'failure' ? 'bad' : '')),
+    h('td', { text: 'Never reached the sprite' })));
+
+  return h('div', { class: 'page-body' },
+    h('div', { class: 'head-text' }, h('h1', { text: 'Schedule' }),
+      h('span', { class: 'muted', text: `Times are shown in your timezone; skipped dates count in the church's (${s.timezone}).` })),
+    status,
+    h('section', { class: 'card', 'aria-labelledby': 'sched-next' }, h('h2', { id: 'sched-next', text: 'Coming up' }),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Day', 'Checks between', 'Checks', 'Status', ''].map((t) => h('th', { scope: 'col', text: t })))),
+        h('tbody', {}, rows))) : h('p', { class: 'muted', text: 'No scheduled times found in the workflow.' }),
+      laterSkips.length ? h('p', { class: 'small', text: `Also skipped: ${laterSkips.map((k) => k.date).join(', ')}` }) : null,
+      owner ? h('div', { class: 'row bottom' },
+        h('div', { class: 'field side' }, h('label', { for: 'skip-date', text: 'Skip another date' }), dateIn),
+        h('div', { class: 'field grow' }, h('label', { for: 'skip-reason', text: 'Reason' }), dateWhy),
+        h('div', { class: 'field' }, h('span', { class: 'sr', text: 'Skip' }),
+          h('button', { class: 'btn', text: 'Skip date', onclick: (e) => {
+            if (!dateIn.value) { toast('Pick a date first.', 'bad'); return; }
+            post('/schedule/skips', { date: dateIn.value, reason: dateWhy.value }, `${dateIn.value} skipped.`)(e);
+          } }))) : null),
+    h('section', { class: 'card', 'aria-labelledby': 'sched-recent' }, h('h2', { id: 'sched-recent', text: 'Recent scheduled runs' }),
+      recent.length || missed.length ? h('div', { class: 'table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Run', 'Started', 'Result', 'Outcome'].map((t) => h('th', { scope: 'col', text: t })))),
+        h('tbody', {}, recent, missed))) : h('p', { class: 'muted', text: 'No scheduled runs recorded yet.' })));
 }
 
 // --- People --------------------------------------------------------------------

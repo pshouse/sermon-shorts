@@ -95,6 +95,14 @@ class ApiTest(unittest.TestCase):
 
     # --- signing in ---
 
+    def test_health_reports_the_running_code(self):
+        from sermon_shorts import __version__
+        h = self.client.get("/api/v1/health").json()
+        self.assertEqual(h["version"], __version__)
+        self.assertTrue(h["label"].startswith(__version__))
+        self.assertEqual(h["on_disk"]["version"], __version__)
+        self.assertFalse(h["on_disk"]["restart_needed"])  # nothing changed since it started
+
     def test_everything_but_health_needs_a_token(self):
         self.assertEqual(self.client.get("/api/v1/health").status_code, 200)
         r = self.client.get("/api/v1/services")
@@ -282,6 +290,29 @@ class ApiTest(unittest.TestCase):
         conn.close()
         r = self.client.get("/api/v1/runs/r_x/log", headers=self.as_(self.owner_token))
         self.assertEqual(r.status_code, 404)
+
+    # --- the schedule ---
+
+    def test_schedule_is_shown_to_all_and_changed_by_owners(self):
+        s = self.client.get("/api/v1/schedule", headers=self.as_(self.reviewer_token)).json()
+        self.assertFalse(s["paused"])
+        self.assertTrue(s["crons"])
+        self.assertIn("upcoming", s)
+        r = self.client.post("/api/v1/schedule/pause", json={},
+                             headers=self.as_(self.approver_token))
+        self.assertEqual(r.status_code, 403)
+        owner = self.as_(self.owner_token)
+        s = self.client.post("/api/v1/schedule/pause", json={"reason": "break"}, headers=owner).json()
+        self.assertEqual((s["paused"], s["reason"]), (True, "break"))
+        r = self.client.post("/api/v1/schedule/pause", json={}, headers=owner)
+        self.assertEqual(r.status_code, 400)  # already paused
+        self.client.post("/api/v1/schedule/resume", headers=owner)
+        s = self.client.post("/api/v1/schedule/skips", json={"date": "2099-11-01"}, headers=owner).json()
+        self.assertEqual([k["date"] for k in s["skips"]], ["2099-11-01"])
+        r = self.client.post("/api/v1/schedule/skips", json={"date": "someday"}, headers=owner)
+        self.assertEqual(r.status_code, 400)
+        s = self.client.delete("/api/v1/schedule/skips/2099-11-01", headers=owner).json()
+        self.assertEqual(s["skips"], [])
 
     # --- the review app ---
 
