@@ -104,7 +104,7 @@ p { margin: 0; }
 
 label { font-size: 13px; font-weight: 600; }
 .field { display: flex; flex-direction: column; gap: 6px; }
-input[type=text], input[type=password], input[type=url], input[type=number], select, textarea {
+input[type=text], input[type=password], input[type=url], input[type=number], input[type=date], select, textarea {
   font: inherit; font-size: 15px; padding: 10px; border-radius: 8px; border: 1px solid #C9CED8; background: var(--surface); color: var(--ink); min-height: 44px; width: 100%; }
 textarea { resize: vertical; min-height: 64px; }
 .check { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; font-weight: 500; }
@@ -165,3 +165,6 @@ th:first-child, td:first-child { padding-left: 0; }
 .footer a { color: var(--muted); }
 .notice { max-width: 1200px; margin: 16px auto 0; padding: 12px 24px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; font-size: 14px; }
 @media (max-width: 1248px) { .notice { margin-left: 24px; margin-right: 24px; } }
+.right { align-items: flex-end; }
+.field .btn { align-self: flex-start; }
+.row.bottom { align-items: flex-end; }

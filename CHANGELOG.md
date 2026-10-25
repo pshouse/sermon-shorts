@@ -31,6 +31,10 @@ versions were tracked.
 - **Run records**: each run's steps, timings, starter and outcome; every
   candidate clip with Claude's verdict and note; `services` and `runs`
   commands.
+- **Schedule**: the Studio's Schedule page and `sermon-shorts schedule`
+  show the coming Sunday checks and recent scheduled runs; owners can pause
+  all scheduled runs or skip specific dates (Run now and manual runs still
+  go ahead). Days and times stay in `.github/workflows/weekly.yml`.
 - **Version tracking**: this changelog, the version and commit recorded on
   every run, and a Studio notice when the server needs a restart to load
   newer code.

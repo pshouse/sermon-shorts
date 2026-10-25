@@ -382,6 +382,25 @@ To try it on your own machine without Caddy:
 http://127.0.0.1:8000/app/ (add `SERMON_SHORTS_INSECURE_COOKIE=1` to sign in
 over plain http).
 
+### The schedule
+
+Scheduled runs happen on the days and times in
+`.github/workflows/weekly.yml` (Sundays, every half hour from 16:00 to
+19:30 UTC). The Studio's **Schedule** page shows the coming checks in your
+own timezone and the recent scheduled runs; owners can pause all scheduled
+runs or skip a date there. From the command line:
+
+```
+python -m sermon_shorts schedule                         # what's coming
+python -m sermon_shorts schedule pause --reason "Holiday break"
+python -m sermon_shorts schedule resume
+python -m sermon_shorts schedule skip 2026-12-27 --reason "No service"
+python -m sermon_shorts schedule unskip 2026-12-27
+```
+
+A held run is recorded as skipped. Run now, manual GitHub runs and the
+command line always go ahead.
+
 ### Versions
 
 `python -m sermon_shorts --version` prints the version and the git commit,

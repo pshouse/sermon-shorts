@@ -73,9 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "serve":
         from .api import serve
         return serve(argv[1:])
-    if argv and argv[0] in ("services", "runs"):
-        from .records_cli import services_main, runs_main
-        return (services_main if argv[0] == "services" else runs_main)(argv[1:])
+    if argv and argv[0] in ("services", "runs", "schedule"):
+        from .records_cli import services_main, runs_main, schedule_main
+        return {"services": services_main, "runs": runs_main,
+                "schedule": schedule_main}[argv[0]](argv[1:])
 
     # Every render command is recorded as a run (core/runs.py). The run opens
     # once the arguments parse; this wrapper closes it however the pipeline
@@ -193,6 +194,16 @@ def _pipeline(argv: list[str]) -> int:
         except runs.RunBusy as e:
             sys.exit(f"Not started: {e}")
     run = runs.current()
+
+    # A run the weekly cron started obeys the owners' pause and skipped
+    # dates (core/schedule.py); a run a person started always goes ahead.
+    if args.weekly and run.actor.login == "schedule":
+        from .core import schedule
+        held = schedule.holds(run.conn)
+        if held:
+            print(f"Scheduled run held: {held}")
+            run.skip(held)
+            return 0
 
     church = _load_church()
     if args.speaker:

@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .core import audit, posts, records, review, runs, users, version
+from .core import audit, posts, records, review, runs, schedule, users, version
 from .core.audit import Actor
 from .core.db import PROJECT_DIR, SCHEMA_VERSION, connect, write
 from .core.posts import PLATFORMS
@@ -340,6 +340,15 @@ class PublishIn(PlanIn):
 class ManualPostIn(BaseModel):
     url: str
     note: str = ""
+
+
+class PauseIn(BaseModel):
+    reason: str = ""
+
+
+class SkipIn(BaseModel):
+    date: str = Field(..., description="YYYY-MM-DD, in the church's timezone")
+    reason: str = ""
 
 
 class RunIn(BaseModel):
@@ -725,6 +734,44 @@ def create_app() -> FastAPI:
             audit.record(conn, _actor(user), "run.cancel_requested", run=run_id,
                          service=run.get("service_id"))
         return {"ok": True}
+
+    # -- the Sunday schedule --
+
+    def sched(fn):
+        try:
+            return fn()
+        except schedule.ScheduleError as e:
+            raise ApiError(400, "not_allowed", str(e))
+
+    @app.get(f"{v1}/schedule")
+    def get_schedule(user: User = Depends(need("view")), conn=Depends(get_conn)):
+        recent = [r for r in runs.list_runs(conn, 200)
+                  if r["started_by"] == schedule.SCHEDULE_STARTER][:12]
+        missed = [{**g, "reached_sprite": False} for g in _github_runs()
+                  if g["event"] == "schedule"
+                  and not conn.execute("SELECT 1 FROM runs WHERE github_run_id = ?",
+                                       (g["github_run_id"],)).fetchone()]
+        return {**schedule.overview(conn), "recent": recent, "never_reached_sprite": missed}
+
+    @app.post(f"{v1}/schedule/pause")
+    def pause_schedule(body: PauseIn, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.set_paused(conn, user, True, body.reason, via="web"))
+        return schedule.overview(conn)
+
+    @app.post(f"{v1}/schedule/resume")
+    def resume_schedule(user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.set_paused(conn, user, False, via="web"))
+        return schedule.overview(conn)
+
+    @app.post(f"{v1}/schedule/skips", status_code=201)
+    def skip_date(body: SkipIn, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.skip(conn, user, body.date, body.reason, via="web"))
+        return schedule.overview(conn)
+
+    @app.delete(f"{v1}/schedule/skips/{{day}}")
+    def unskip_date(day: str, user: User = Depends(need("run")), conn=Depends(get_conn)):
+        sched(lambda: schedule.unskip(conn, user, day, via="web"))
+        return schedule.overview(conn)
 
     # -- audit --
 

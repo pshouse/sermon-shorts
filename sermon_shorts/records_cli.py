@@ -213,3 +213,67 @@ def runs_main(argv: list[str]) -> int:
             prev = e["t"]
         return 0
     return 2
+
+
+def schedule_main(argv: list[str]) -> int:
+    from .core import schedule
+
+    p = argparse.ArgumentParser(prog="sermon-shorts schedule",
+                                description="The Sunday schedule: see it, pause it, skip dates. "
+                                            "Days and times are set in .github/workflows/weekly.yml.")
+    p.add_argument("--as", dest="as_user", metavar="LOGIN",
+                   help=f"who is acting (default: ${USER_ENV}); changes need an owner")
+    sub = p.add_subparsers(dest="cmd")
+    s = sub.add_parser("show", help="what's coming (the default)")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("pause", help="hold all scheduled runs until resumed")
+    s.add_argument("--reason", default="")
+    sub.add_parser("resume", help="let scheduled runs go ahead again")
+    s = sub.add_parser("skip", help="hold scheduled runs on one date")
+    s.add_argument("date", help="YYYY-MM-DD")
+    s.add_argument("--reason", default="")
+    s = sub.add_parser("unskip", help="undo a skipped date")
+    s.add_argument("date")
+    args = p.parse_args(argv)
+    conn = connect()
+
+    if args.cmd in (None, "show"):
+        o = schedule.overview(conn)
+        if getattr(args, "json", False):
+            print(json.dumps(o, indent=2))
+            return 0
+        tz = schedule.church_tz()
+        print(f"Schedule ({o['workflow']}: {', '.join(o['crons']) or 'no cron found'}), "
+              f"times in {tz.key}")
+        if o["paused"]:
+            print(f"  PAUSED by {o['paused_by']} since {_when(o['paused_at'])}"
+                  + (f": {o['reason']}" if o["reason"] else ""))
+        for u in o["upcoming"]:
+            first = datetime.fromisoformat(u["first"].replace("Z", "+00:00")).astimezone(tz)
+            last = datetime.fromisoformat(u["last"].replace("Z", "+00:00")).astimezone(tz)
+            held = {"paused": "  (held: paused)",
+                    "skipped": f"  (skipped by {u['skip']['by_login'] if u['skip'] else ''})"}.get(u["held_by"], "")
+            print(f"  {first:%a %Y-%m-%d}  {first:%H:%M}-{last:%H:%M}, {u['checks']} checks{held}")
+        past = [k for k in o["skips"] if k["date"] not in {u["date"] for u in o["upcoming"]}]
+        for k in past:
+            print(f"  skip on {k['date']} by {k['by_login']}" + (f": {k['reason']}" if k["reason"] else ""))
+        return 0
+
+    login = args.as_user or os.environ.get(USER_ENV)
+    user = users.get(conn, login) if login else None
+    if user is None:
+        sys.exit(f"Say who is acting: --as LOGIN, or set {USER_ENV} (an owner).")
+    try:
+        if args.cmd == "pause":
+            schedule.set_paused(conn, user, True, args.reason)
+            print("Scheduled runs are paused. Run now and manual runs still work.")
+        elif args.cmd == "resume":
+            schedule.set_paused(conn, user, False)
+            print("Scheduled runs will go ahead again.")
+        elif args.cmd == "skip":
+            print(f"Scheduled runs on {schedule.skip(conn, user, args.date, args.reason)} will be held.")
+        elif args.cmd == "unskip":
+            print(f"{schedule.unskip(conn, user, args.date)} is no longer skipped.")
+    except schedule.ScheduleError as e:
+        sys.exit(f"Not done: {e}")
+    return 0
