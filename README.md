@@ -408,7 +408,16 @@ e.g. `sermon-shorts 0.2.0 (39d0a25)`. The Studio shows the same in its footer
 (with a link to [CHANGELOG.md](CHANGELOG.md)), every run records the version
 that made it, and owners see a "Restart needed" notice when new Python code
 has been pulled onto the sprite but the `api` service is still running the
-old code.
+old code. The notice gives the command to copy; it's usually:
+
+```
+sprite exec -s sermon-shorts -- bash -lc 'sprite-env services restart api'
+```
+
+When `requirements.txt` changed too, install first:
+`.venv/bin/pip install -q -r requirements.txt` in `~/sermon-shorts`, then
+restart. Changes to the Studio's own files (`sermon_shorts/web/`) need no
+restart, only a `git pull`.
 
 ### The review app's API
 

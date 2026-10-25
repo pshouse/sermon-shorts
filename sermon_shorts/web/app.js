@@ -8,6 +8,7 @@
 
 const API = '/api/v1';
 const REPO = 'https://github.com/pshouse/sermon-shorts';
+const SPRITE = 'sermon-shorts';  // the Fly.io sprite the app runs on
 const PLATFORMS = ['youtube', 'facebook', 'instagram'];
 const PLATFORM_NAMES = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram' };
 const STEP_NAMES = {
@@ -207,12 +208,20 @@ async function refreshVersion() {
   // Owners run the server: tell them when it's behind the code on disk.
   const disk = v.on_disk || {};
   const behind = can('run') && disk.restart_needed;
+  // New dependencies have to be installed before the restart can load them.
+  const deps = behind && disk.changed_files.includes('requirements.txt');
+  const command = `sprite exec -s ${SPRITE} -- bash -lc '` +
+    (deps ? 'cd ~/sermon-shorts && .venv/bin/pip install -q -r requirements.txt && ' : '') +
+    "sprite-env services restart api'";
   document.getElementById('notice').replaceChildren(behind ? h('div', { class: 'notice' },
-    h('strong', { text: 'Restart needed. ' }),
-    `The server is running ${v.label}, but newer code is on the sprite ` +
-    `(${disk.version && disk.version !== v.version ? `${disk.version}, ` : ''}${disk.commit}) that changes ` +
-    `${disk.changed_files.length} Python file${disk.changed_files.length === 1 ? '' : 's'}. ` +
-    'Restart the api service on the sprite to load it.') : '');
+    h('p', {}, h('strong', { text: 'Restart needed. ' }),
+      `The server is running ${v.label}, but newer code is on the sprite ` +
+      `(${disk.version && disk.version !== v.version ? `${disk.version}, ` : ''}${disk.commit}) that changes ` +
+      `${disk.changed_files.length} file${disk.changed_files.length === 1 ? '' : 's'} it has to reload` +
+      (deps ? ', including its dependencies' : '') + '. Run this on your computer:'),
+    h('div', { class: 'notice-cmd' }, h('code', { class: 'secret', text: command }),
+      h('button', { class: 'btn small', text: 'Copy', onclick: () => navigator.clipboard.writeText(command)
+        .then(() => toast('Copied. Reload this page once it has restarted.'), () => toast('Select the command and copy it.', 'bad')) }))) : '');
 }
 
 function renderTopbar(page) {
