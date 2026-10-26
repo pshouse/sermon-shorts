@@ -8,6 +8,11 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+### Fixed
+- The Sunday checks no longer end an hour early after daylight saving time ends:
+  the weekly workflow now runs every half hour from 16:00 to 20:30 UTC, which
+  covers 12:00-15:30 US Eastern all year.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
