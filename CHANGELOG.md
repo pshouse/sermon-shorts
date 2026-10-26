@@ -8,6 +8,8 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
 ### Added
 - The Studio has a favicon.
 - A clip that has to be posted to Instagram by hand shows its caption (title and
@@ -24,6 +26,8 @@ MINOR for new features, PATCH for fixes. The version lives in
   again. Uploaders' warnings (such as a refused cover) show in the Studio
   instead of only in the server's output. `publish` on the command line
   prints the same stages.
+- API: posting jobs report each post's progress under `items` (the `log`
+  field is gone), and `GET /api/v1/publish-jobs?service=` lists recent ones.
 - The Studio's "Restart needed" notice gives the exact command to copy, with
   the dependency install step when `requirements.txt` changed too.
 
@@ -88,6 +92,7 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pshouse/sermon-shorts/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pshouse/sermon-shorts/releases/tag/v0.1.0
