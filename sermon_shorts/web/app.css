@@ -171,3 +171,13 @@ th:first-child, td:first-child { padding-left: 0; }
 .notice p { margin: 0 0 8px; }
 .notice-cmd { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .notice-cmd code { flex: 1 1 320px; color: var(--ink); }
+
+/* --- posting progress --- */
+.bar { position: relative; height: 8px; border-radius: 999px; background: var(--neutral-bg); overflow: hidden; }
+.bar-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .6s ease; }
+.bar.busy .bar-fill { width: 35%; position: absolute; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { from { left: -35%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar.busy .bar-fill { animation: none; width: 100%; opacity: .35; } }
+.live { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.job-title { flex: 0 1 220px; min-width: 0; font-size: 14px; font-weight: 500; }
+.warn-text { color: var(--warn); }

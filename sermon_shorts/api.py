@@ -223,10 +223,28 @@ def _run_publish_job(job_id: str, user: User, sid: str, folder: Path, jobs: list
     job = _jobs[job_id]
     stop = threading.Event()
     threading.Thread(target=_sprite_hold, args=(f"publish-{job_id}", stop), daemon=True).start()
+
+    def progress(i: int, stage: str, **info) -> None:
+        # Only this thread writes; readers get a snapshot via _job_view.
+        item = job["items"][i]
+        now = time.time()
+        if stage == "start":
+            item.update(state="starting", started=now)
+        elif stage in ("done", "failed"):
+            item.update(state=stage, finished=now, percent=100 if stage == "done" else item["percent"],
+                        url=info.get("url"), cover=info.get("cover"), error=info.get("error"))
+        elif stage == "note":
+            item["notes"].append(info.get("detail", ""))
+        else:
+            if stage != item["state"]:
+                item.update(state=stage, percent=None, stage_started=now)
+            if info.get("percent") is not None:
+                item["percent"] = max(0, min(100, int(info["percent"])))
+        job["updated"] = now
+
     conn = connect()
     try:
-        job["results"] = post_jobs(conn, _actor(user), sid, folder, jobs,
-                                   say=lambda line: job["log"].append(line.strip()))
+        job["results"] = post_jobs(conn, _actor(user), sid, folder, jobs, progress=progress)
         job["status"] = "failed" if any(r["error"] for r in job["results"]) else "succeeded"
     except Exception as e:  # recorded so the app can show it; posts made so far are kept
         job["status"], job["error"] = "failed", f"{type(e).__name__}: {e}"
@@ -234,6 +252,22 @@ def _run_publish_job(job_id: str, user: User, sid: str, folder: Path, jobs: list
         job["finished_at"] = audit.now()
         stop.set()
         conn.close()
+
+
+def _job_view(job: dict) -> dict:
+    """A posting job as the app shows it: each post's stage, percentage when
+    known, and seconds spent so far, measured here so clocks can't disagree."""
+    now = time.time()
+    items = []
+    for it in job["items"]:
+        end = it["finished"] or now
+        items.append({**{k: v for k, v in it.items() if k not in ("started", "stage_started", "finished")},
+                      "elapsed": int(end - it["started"]) if it["started"] else 0,
+                      "stage_elapsed": int(end - it["stage_started"]) if it["stage_started"] else 0})
+    done = sum(1 for it in items if it["state"] in ("done", "failed"))
+    return {**{k: v for k, v in job.items() if k not in ("items", "updated")},
+            "items": items, "done": done, "total": len(items),
+            "failed": sum(1 for it in items if it["state"] == "failed")}
 
 
 # --- runs -------------------------------------------------------------------
@@ -571,12 +605,26 @@ def create_app() -> FastAPI:
         with _jobs_lock:
             if any(j["status"] == "running" and j["service"] == sid for j in _jobs.values()):
                 raise ApiError(409, "publish_active", "A publish for this service is running.")
-            _jobs[job_id] = {"id": job_id, "service": sid, "plan_id": pid, "by": user.login,
-                             "status": "running", "started_at": audit.now(),
-                             "finished_at": None, "results": [], "log": [], "error": None}
+            _jobs[job_id] = {
+                "id": job_id, "service": sid, "plan_id": pid, "by": user.login,
+                "status": "running", "started_at": audit.now(), "finished_at": None,
+                "results": [], "error": None, "updated": time.time(),
+                "items": [{"n": j["n"], "file": j["entry"]["file"], "title": j["entry"]["title"],
+                           "platform": j["platform"], "state": "queued", "percent": None,
+                           "started": None, "stage_started": None, "finished": None,
+                           "url": None, "cover": None, "error": None, "notes": []}
+                          for j in jobs]}
         threading.Thread(target=_run_publish_job, args=(job_id, user, sid, folder, jobs),
                          daemon=True).start()
         return {"job_id": job_id}
+
+    @app.get(f"{v1}/publish-jobs")
+    def publish_jobs(service: str | None = None, user: User = Depends(need("view"))):
+        """Recent posting jobs, newest first: the Publish page picks a running
+        one back up after a reload or a visit to another page."""
+        found = [j for j in _jobs.values() if service is None or j["service"] == service]
+        found.sort(key=lambda j: j["started_at"], reverse=True)
+        return [_job_view(j) for j in found[:5]]
 
     @app.get(f"{v1}/publish-jobs/{{job_id}}")
     def publish_job(job_id: str, user: User = Depends(need("view"))):
@@ -584,7 +632,7 @@ def create_app() -> FastAPI:
         if job is None:
             raise ApiError(404, "no_job", "No such publish job (the server may have restarted;"
                            " the service's posts show what went out).")
-        return job
+        return _job_view(job)
 
     @app.post(f"{v1}/services/{{sid}}/clips/{{file}}/posts/{{platform}}/manual", status_code=201)
     def mark_posted(sid: str, file: str, platform: str, body: ManualPostIn,

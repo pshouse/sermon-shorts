@@ -59,7 +59,11 @@ class ApiTest(unittest.TestCase):
         self.posted = []
 
         def fake(platform):
-            def post(clip, mp4, jpg):
+            def post(clip, mp4, jpg, progress=lambda *a, **k: None):
+                progress("uploading", percent=50)
+                progress("processing", waited=0)
+                if platform == "youtube":
+                    progress("note", detail="a warning worth showing")
                 self.posted.append((clip["file"], platform))
                 return f"{platform}-id", f"https://{platform}.example/{clip['file']}", "set"
             return post
@@ -209,6 +213,27 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 201)
         s = self.client.get(f"{base}", headers=self.as_(self.reviewer_token)).json()
         self.assertEqual(s["needs_you"], [])
+
+    def test_a_posting_job_reports_each_post_and_can_be_found_again(self):
+        self.approve("02_clip.mp4")
+        base = f"/api/v1/services/{self.sid}"
+        body = {"clips": ["02_clip.mp4"], "platforms": ["youtube", "facebook"]}
+        plan = self.client.post(f"{base}/publish-plans", json=body,
+                                headers=self.as_(self.approver_token)).json()
+        job_id = self.client.post(f"{base}/publish", json={**body, "plan_id": plan["plan_id"]},
+                                  headers=self.as_(self.approver_token)).json()["job_id"]
+        job = self.wait_job(job_id)
+        self.assertEqual((job["done"], job["total"], job["failed"]), (2, 2, 0))
+        self.assertEqual([(i["platform"], i["state"], i["percent"]) for i in job["items"]],
+                         [("youtube", "done", 100), ("facebook", "done", 100)])
+        self.assertEqual(job["items"][0]["notes"], ["a warning worth showing"])
+        self.assertTrue(job["items"][0]["url"].startswith("https://youtube.example/"))
+        listed = self.client.get(f"/api/v1/publish-jobs?service={self.sid}",
+                                 headers=self.as_(self.reviewer_token)).json()
+        self.assertEqual(listed[0]["id"], job_id)
+        none = self.client.get("/api/v1/publish-jobs?service=nope",
+                               headers=self.as_(self.reviewer_token)).json()
+        self.assertEqual(none, [])
 
     def wait_job(self, job_id):
         for _ in range(100):
