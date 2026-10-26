@@ -8,7 +8,22 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+### Added
+- The Studio has a favicon.
+- A clip that has to be posted to Instagram by hand shows its caption (title and
+  description, as the API would post it) with a Copy caption button, and a
+  Download cover button next to Download video.
+
 ### Changed
+- Posting shows its progress: while it runs, the Publish page shows a panel
+  with each post's stage (uploading, with a percentage on YouTube;
+  processing, with Meta's percentage and the time waited; setting the
+  cover), a timer, and an overall "2 of 5" bar, and the clip cards show the
+  same live. The clip picker is hidden until posting finishes; a summary
+  stays until dismissed, and leaving and coming back picks the progress up
+  again. Uploaders' warnings (such as a refused cover) show in the Studio
+  instead of only in the server's output. `publish` on the command line
+  prints the same stages.
 - The Studio's "Restart needed" notice gives the exact command to copy, with
   the dependency install step when `requirements.txt` changed too.
 

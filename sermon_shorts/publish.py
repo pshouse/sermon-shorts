@@ -46,6 +46,23 @@ class PublishError(Exception):
     pass
 
 
+# --- progress ---------------------------------------------------------------
+# Each uploader reports what it's doing as it goes, so the Studio and the
+# command line can show more than a silent wait: progress(stage, **info) with
+# stage "uploading" (percent when known), "processing" (the platform working
+# on the video; percent or waited seconds when known), "publishing", "cover",
+# or "note" (a warning worth showing, in detail=...).
+
+def _quiet(stage: str, **info) -> None:
+    pass
+
+
+# YouTube takes the upload in chunks so the percentage can be reported; it
+# must be a multiple of 256 KiB, and 8 MiB gives a typical 40-80 MB clip
+# 5-10 steps without adding many round trips.
+YT_CHUNK = 8 * 1024 * 1024
+
+
 # --- YouTube ----------------------------------------------------------------
 
 def _youtube(interactive: bool = False):
@@ -96,7 +113,8 @@ def set_youtube_cover(video_id: str, jpg: Path, yt=None) -> None:
         raise PublishError(e.reason) from e
 
 
-def publish_youtube(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, str | None]:
+def publish_youtube(clip: dict, mp4: Path, jpg: Path | None,
+                    progress=_quiet) -> tuple[str, str, str | None]:
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
@@ -111,28 +129,32 @@ def publish_youtube(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, 
         request = yt.videos().insert(
             part="snippet,status", body=body,
             media_body=MediaFileUpload(str(mp4), mimetype="video/mp4",
-                                       chunksize=-1, resumable=True))
+                                       chunksize=YT_CHUNK, resumable=True))
+        progress("uploading", percent=0)
         response = None
         while response is None:
-            _, response = request.next_chunk(num_retries=3)
+            status, response = request.next_chunk(num_retries=3)
+            if status is not None:
+                progress("uploading", percent=int(status.progress() * 100))
     except HttpError as e:
         raise PublishError(f"YouTube upload failed: {e.reason}") from e
 
     video_id = response["id"]
     if response.get("status", {}).get("privacyStatus") != "public":
-        print("    note: YouTube locked this video as private — until the API project "
-              "passes YouTube's audit it can only upload private videos "
-              "(see 'Publishing' in the README).")
+        progress("note", detail="YouTube locked this video as private: until the API project "
+                 "passes YouTube's audit it can only upload private videos "
+                 "(see 'Publishing' in the README).")
     cover = None
     if jpg:
+        progress("cover")
         try:
             set_youtube_cover(video_id, jpg, yt)
             cover = "set"
         except PublishError as e:
             cover = "failed"
-            print(f"    cover image not set ({e}) — try again later with retry-cover; "
-                  "if it keeps failing, the channel may need phone verification "
-                  "for custom thumbnails")
+            progress("note", detail=f"cover image not set ({e}); try again later with retry-cover. "
+                     "If it keeps failing, the channel may need phone verification "
+                     "for custom thumbnails.")
     return video_id, f"https://youtube.com/shorts/{video_id}", cover
 
 
@@ -194,7 +216,8 @@ def _caption(clip: dict) -> str:
     return f"{clip['title']}\n\n{clip.get('description', '')}".strip()[:2200]
 
 
-def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, None]:
+def publish_instagram(clip: dict, mp4: Path, jpg: Path | None,
+                      progress=_quiet) -> tuple[str, str, None]:
     token = _meta_token()
     ig = _meta_ids(token)["ig_user_id"]
     if not ig:
@@ -204,11 +227,14 @@ def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str
         "media_type": "REELS", "upload_type": "resumable",
         "caption": _caption(clip), "share_to_feed": "true",
     })
+    progress("uploading")
     _upload_bytes(container.get("uri") or f"https://rupload.facebook.com/ig-api-upload/"
                   f"{GRAPH.rsplit('/', 1)[1]}/{container['id']}", token, mp4)
 
-    deadline = time.monotonic() + PROCESSING_TIMEOUT
+    began = time.monotonic()
+    deadline = began + PROCESSING_TIMEOUT
     while True:
+        progress("processing", waited=int(time.monotonic() - began))
         state = _graph("GET", container["id"], token, params={"fields": "status_code,status"})
         code = state.get("status_code")
         if code == "FINISHED":
@@ -220,6 +246,7 @@ def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str
                                "try again later")
         time.sleep(5)
 
+    progress("publishing")
     media = _graph("POST", f"{ig}/media_publish", token, data={"creation_id": container["id"]})
     link = _graph("GET", media["id"], token, params={"fields": "permalink"}).get("permalink", "")
     # The Graph API only takes a cover from a public URL, so the designed .jpg
@@ -227,38 +254,46 @@ def publish_instagram(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str
     return media["id"], link, None
 
 
-def publish_facebook(clip: dict, mp4: Path, jpg: Path | None) -> tuple[str, str, str | None]:
+def publish_facebook(clip: dict, mp4: Path, jpg: Path | None,
+                     progress=_quiet) -> tuple[str, str, str | None]:
     token = _meta_token()
     page = _meta_ids(token)["page_id"]
     start = _graph("POST", f"{page}/video_reels", token, data={"upload_phase": "start"})
     video_id = start["video_id"]
+    progress("uploading")
     _upload_bytes(start["upload_url"], token, mp4)
+    progress("publishing")
     _graph("POST", f"{page}/video_reels", token, data={
         "upload_phase": "finish", "video_id": video_id, "video_state": "PUBLISHED",
         "title": clip["title"], "description": _caption(clip),
     })
 
     # Publishing finishes asynchronously; wait so processing errors surface here.
-    deadline = time.monotonic() + PROCESSING_TIMEOUT
+    began = time.monotonic()
+    deadline = began + PROCESSING_TIMEOUT
     while time.monotonic() < deadline:
         status = _graph("GET", video_id, token, params={"fields": "status"}).get("status", {})
+        # Meta includes a processing percentage while it works on the video.
+        progress("processing", waited=int(time.monotonic() - began),
+                 percent=status.get("processing_progress"))
         if status.get("video_status") == "error":
             raise PublishError(f"Facebook couldn't process the video: {status}")
         if status.get("publishing_phase", {}).get("status") == "complete":
             break
         time.sleep(5)
     else:
-        print("    Facebook is still processing — it will go live when done")
+        progress("note", detail="Facebook is still processing; it will go live when done.")
 
     cover = None
     if jpg:
+        progress("cover")
         try:
             _graph("POST", f"{video_id}/thumbnails", token, data={"is_preferred": "true"},
                    files={"source": (jpg.name, jpg.read_bytes(), "image/jpeg")})
             cover = "set"
         except PublishError as e:
             cover = "failed"
-            print(f"    cover image not set ({e})")
+            progress("note", detail=f"cover image not set ({e})")
     return video_id, f"https://www.facebook.com/reel/{video_id}", cover
 
 
@@ -442,31 +477,63 @@ def main(argv: list[str]) -> int:
         # Re-plan from the recorded decisions: what goes out is what the gate allows.
         jobs, _ = posts.plan(conn, service_id, folder, chosen, platforms)
 
-    results = post_jobs(conn, actor, service_id, folder, jobs)
+    results = post_jobs(conn, actor, service_id, folder, jobs, progress=_print_progress())
     failed = sum(1 for r in results if r["error"])
     print(f"\nDone — {len(jobs) - failed} posted, {failed} failed "
           f"(record in {folder / LEDGER})")
     return 1 if failed else 0
 
 
+def _print_progress():
+    """The command line's view of post_jobs' progress: each stage once, upload
+    percentages in quarter steps, and the outcome."""
+    shown: dict = {}
+
+    def show(i: int, stage: str, **info) -> None:
+        if stage == "start":
+            print(f"\n{info['platform']}: {info['title']}")
+        elif stage == "done":
+            print(f"    posted: {info['url']}")
+        elif stage == "failed":
+            print(f"    FAILED: {info['error']}")
+        elif stage == "note":
+            print(f"    note: {info['detail']}")
+        elif stage == "uploading" and info.get("percent") is not None:
+            step = info["percent"] // 25 * 25
+            if shown.get((i, stage)) != step:
+                shown[(i, stage)] = step
+                print(f"    uploading... {step}%")
+        elif shown.get((i, stage)) is None:
+            shown[(i, stage)] = True
+            print(f"    {stage}...")
+    return show
+
+
 def post_jobs(conn, actor: Actor, service_id: str, folder: Path, jobs: list[dict],
-              say=print) -> list[dict]:
+              progress=None) -> list[dict]:
     """Post planned jobs (from posts.plan, already through the gate), recording
     each one in published.json and the database as it goes. Shared by this
-    command and the web API. Returns one result per job."""
+    command and the web API. Returns one result per job.
+
+    `progress(i, stage, **info)` hears about job i as it goes: "start", then
+    the uploader's stages ("uploading", "processing", "publishing", "cover",
+    "note"; see _quiet), then "done" (url, cover) or "failed" (error)."""
+    report = progress or (lambda i, stage, **info: None)
     ledger = posts.load_ledger(folder)
     results = []
-    for job in jobs:
+    for i, job in enumerate(jobs):
         clip, platform = job["entry"], job["platform"]
         mp4 = folder / clip["file"]
         jpg = mp4.with_suffix(".jpg")
-        say(f"\n{platform}: {clip['title']}")
+        report(i, "start", platform=platform, title=clip["title"])
         result = {"n": job["n"], "file": clip["file"], "title": clip["title"],
                   "platform": platform, "url": None, "cover": None, "error": None}
         try:
-            post_id, url, cover = PUBLISHERS[platform](clip, mp4, jpg if jpg.exists() else None)
+            post_id, url, cover = PUBLISHERS[platform](
+                clip, mp4, jpg if jpg.exists() else None,
+                progress=lambda stage, _i=i, **info: report(_i, stage, **info))
         except PublishError as e:
-            say(f"    FAILED: {e}")
+            report(i, "failed", error=str(e))
             posts.record_failure(conn, actor, service_id, clip["file"], platform, str(e))
             results.append({**result, "error": str(e)})
             continue
@@ -475,6 +542,6 @@ def post_jobs(conn, actor: Actor, service_id: str, folder: Path, jobs: list[dict
             "by": actor.login})
         posts.record_post(conn, actor, service_id, clip["file"], platform, post_id, url,
                           job["fingerprint"], cover=cover)
-        say(f"    posted: {url}")
+        report(i, "done", url=url, cover=cover)
         results.append({**result, "url": url, "cover": cover})
     return results

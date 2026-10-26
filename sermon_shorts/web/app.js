@@ -543,6 +543,21 @@ async function pagePublish(r) {
   const base = `/services/${encodeURIComponent(sid)}`;
   const canPublish = can('publish');
 
+  // A posting job for this service, running or just finished: it takes over
+  // the top of the page, and its posts show live in the clip cards below.
+  const latest = (await api(`/publish-jobs?service=${encodeURIComponent(sid)}`))[0];
+  const running = latest && latest.status === 'running' ? latest : null;
+  const finished = !running && latest && latest.finished_at && state.dismissedJob !== latest.id &&
+    Date.now() - new Date(latest.finished_at) < 15 * 60 * 1000 ? latest : null;
+  const slots = {};  // `${file}:${platform}` -> the clip card row to keep live
+  const jobArea = h('div', {});
+  if (running) {
+    jobArea.append(jobPanel(running));
+    followJob(running.id, jobArea, slots);
+  } else if (finished) {
+    jobArea.append(jobPanel(finished, () => { state.dismissedJob = finished.id; jobArea.replaceChildren(); }));
+  }
+
   // Choose, preview, confirm.
   const candidates = svc.clips.filter((c) => c.review_state === 'approved' &&
     PLATFORMS.some((p) => !c.posts[p] && !(p === 'instagram' && c.instagram_needs_manual)));
@@ -558,16 +573,15 @@ async function pagePublish(r) {
       plan.posts.length ? h('ul', { class: 'list' }, posts) : null,
       skipped.length ? [h('h3', { text: 'Skipped' }), h('ul', { class: 'list' }, skipped)] : null,
       plan.posts.length ? h('div', { class: 'actions' },
-        h('button', { class: 'btn danger', text: `Post publicly now (${plan.posts.length})`, onclick: (e) => act(e.currentTarget, async () => {
-          const { job_id: job } = await api(`${base}/publish`, { method: 'POST', body: { clips: files, platforms: plan.platforms, plan_id: plan.plan_id } });
-          await followJob(job, planArea);
-        }, { refresh: false }) }),
+        h('button', { class: 'btn danger', text: `Post publicly now (${plan.posts.length})`, onclick: (e) => act(e.currentTarget,
+          // The page redraws in posting mode: it finds the job that just started.
+          () => api(`${base}/publish`, { method: 'POST', body: { clips: files, platforms: plan.platforms, plan_id: plan.plan_id } })) }),
         h('button', { class: 'btn', text: 'Cancel', onclick: () => planArea.replaceChildren() })) : null,
       h('p', { class: 'muted small', text: 'Posts go out immediately and publicly. If anything changes before you confirm, the post is refused and you preview again.' })));
     planArea.querySelector('button')?.focus();
   };
 
-  const chooser = canPublish ? h('section', { class: 'card', 'aria-labelledby': 'choose-h' },
+  const chooser = running ? null : canPublish ? h('section', { class: 'card', 'aria-labelledby': 'choose-h' },
     h('h2', { id: 'choose-h', text: 'Ready to post' }),
     candidates.length ? [
       candidates.map((c, i) => h('label', { class: 'check', for: `pick-${c.n}` }, boxes[i], c.title)),
@@ -583,12 +597,18 @@ async function pagePublish(r) {
   const clipCards = svc.clips.map((c) => h('section', { class: 'card', 'aria-label': c.title },
     h('div', { class: 'card-head' }, h('h2', { text: c.title }),
       h('span', { class: 'muted small', text: `${Math.round(c.seconds)}s · ${reviewLine(c) || STATE_TEXT[c.review_state]}` })),
-    h('div', {}, PLATFORMS.map((p) => platformRow(svc, c, p, base, canPublish)))));
+    h('div', {}, PLATFORMS.map((p) => {
+      const item = running && running.items.find((it) => it.file === c.file && it.platform === p);
+      if (!item) return platformRow(svc, c, p, base, canPublish);
+      const slot = h('div', { class: 'platform' }, liveRow(item));
+      slots[`${c.file}:${p}`] = slot;
+      return slot;
+    }))));
 
   return h('div', { class: 'page-body' },
     serviceHead(svc, 'Publish and track', serviceSwitcher(services, sid, 'publish')),
     h('p', { class: 'muted', text: 'Only approved clips can be posted, never twice to the same place. Every post is recorded with who made it.' }),
-    chooser, clipCards);
+    jobArea, chooser, clipCards);
 }
 
 function platformRow(svc, clip, platform, base, canPublish) {
@@ -614,9 +634,16 @@ function platformRow(svc, clip, platform, base, canPublish) {
   if (platform === 'instagram' && clip.instagram_needs_manual) {
     const id = `manual-${clip.n}`;
     const url = h('input', { type: 'url', id, placeholder: 'https://www.instagram.com/reel/...' });
+    // The same caption the API would have posted (publish._caption), so a hand post matches.
+    const caption = `${clip.title}\n\n${clip.description || ''}`.trim().slice(0, 2200);
+    const captionBox = h('p', { class: 'box caption', text: caption });
     return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
-      h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app, then record the link here.` }),
+      h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app with this caption, then record the link here.` }),
       clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
+      clip.cover_url ? h('a', { href: clip.cover_url, download: clip.file.replace(/\.mp4$/i, '.jpg'), class: 'btn small', text: 'Download cover' }) : null,
+      h('div', { class: 'caption-row' }, captionBox,
+        h('button', { class: 'btn small', text: 'Copy caption', onclick: () => navigator.clipboard.writeText(caption)
+          .then(() => toast('Caption copied.'), () => { selectText(captionBox); toast('Copy the selected caption.', 'bad'); }) })),
       canPublish ? h('div', { class: 'inline-form' },
         h('label', { for: id, class: 'sr' }, 'Instagram link'), url,
         h('button', { class: 'btn small primary', text: 'Mark as posted', onclick: (e) => {
@@ -628,21 +655,111 @@ function platformRow(svc, clip, platform, base, canPublish) {
     h('span', { class: 'platform-detail muted', text: 'Approved; choose it above to post.' }));
 }
 
-async function followJob(jobId, area) {
-  const log = h('pre', { class: 'joblog', 'aria-live': 'polite' });
-  const status = pill('Posting…', 'info');
-  area.replaceChildren(h('div', { class: 'card plan' }, h('div', { class: 'card-head' }, h('h2', { text: 'Posting' }), status), log));
-  for (;;) {
-    const job = await api(`/publish-jobs/${encodeURIComponent(jobId)}`);
-    log.textContent = job.log.filter(Boolean).join('\n') || 'Starting…';
+// Selects an element's text, for when the clipboard isn't available.
+function selectText(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// --- posting progress ----------------------------------------------------------
+
+function dur(sec) {
+  return sec >= 60 ? `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s` : `${sec}s`;
+}
+
+// What one post is doing, in words.
+function stageText(it) {
+  const name = PLATFORM_NAMES[it.platform];
+  switch (it.state) {
+    case 'queued': return 'Waiting its turn';
+    case 'starting': return `Connecting to ${name}`;
+    case 'uploading': return `Uploading the video${it.percent !== null ? ` · ${it.percent}%` : ''}`;
+    case 'processing': return `${name} is processing the video${it.percent ? ` · ${it.percent}%` : ''} · ${dur(it.stage_elapsed)}` +
+      (it.stage_elapsed > 90 ? ' (this can take a few minutes)' : '');
+    case 'publishing': return 'Publishing';
+    case 'cover': return 'Setting the cover image';
+    case 'done': return `Posted${it.cover === 'failed' ? ', but the cover image was refused' : ''}`;
+    case 'failed': return `Failed: ${it.error}`;
+    default: return it.state;
+  }
+}
+
+// A bar: filled to the percentage when the platform reports one, sliding
+// while it works without one, empty while queued.
+function progressBar(percent, busy, label) {
+  const fill = h('div', { class: 'bar-fill' });
+  const bar = h('div', { class: `bar${busy && percent === null ? ' busy' : ''}`, role: 'progressbar',
+    'aria-label': label, 'aria-valuemin': '0', 'aria-valuemax': '100',
+    'aria-valuenow': percent === null ? null : String(percent) }, fill);
+  if (percent !== null) fill.style.width = `${percent}%`;  // CSSOM: allowed by the page's CSP
+  return bar;
+}
+
+function itemPercent(it) {
+  if (it.state === 'done') return 100;
+  if (it.state === 'queued') return 0;
+  return it.state === 'uploading' || (it.state === 'processing' && it.percent) ? it.percent : null;
+}
+
+const ITEM_TONE = { done: 'ok', failed: 'bad', queued: '' };
+
+// The parts of one post's row, used in the panel and in the clip cards.
+function liveRow(it) {
+  const busy = !['queued', 'done', 'failed'].includes(it.state);
+  return [
+    h('span', { class: 'platform-name', text: PLATFORM_NAMES[it.platform] }),
+    pill(it.state === 'done' ? 'Posted' : it.state === 'failed' ? 'Failed' : busy ? 'Posting' : 'Queued',
+      ITEM_TONE[it.state] ?? 'info'),
+    h('div', { class: 'live' },
+      progressBar(itemPercent(it), busy, `${PLATFORM_NAMES[it.platform]}: ${it.title}`),
+      h('span', { class: `small ${it.state === 'failed' ? 'error' : 'muted'}` }, stageText(it),
+        it.url ? [' · ', h('a', { href: it.url, target: '_blank', rel: 'noopener noreferrer', text: 'view post' })] : null),
+      it.notes.map((n) => h('span', { class: 'small warn-text', text: n }))),
+    h('span', { class: 'mono muted', text: it.state === 'queued' ? '' : dur(it.elapsed) }),
+  ];
+}
+
+function jobPanel(job, onDismiss) {
+  const running = job.status === 'running';
+  const current = Math.min(job.done + 1, job.total);
+  const title = running ? `Posting ${current} of ${job.total}`
+    : job.failed ? `Posted ${job.done - job.failed} of ${job.total}; ${job.failed} failed`
+      : `Posted all ${job.total}`;
+  return h('section', { class: 'card plan', 'aria-labelledby': 'job-h' },
+    h('div', { class: 'card-head' }, h('h2', { id: 'job-h', text: title }),
+      pill(running ? 'Posting' : job.failed ? 'Some failed' : 'Done', running ? 'info' : job.failed ? 'bad' : 'ok')),
+    progressBar(Math.round(100 * job.done / job.total), false, 'Posts finished'),
+    h('p', { class: 'muted small', text: running
+      ? 'Posts go out one at a time. You can leave this page: posting carries on on the server.'
+      : `Finished ${when(job.finished_at)}, posted by ${job.by}.` }),
+    h('div', {}, job.items.map((it) => h('div', { class: 'platform' },
+      liveRow(it).slice(0, 1), h('span', { class: 'job-title', text: it.title }), liveRow(it).slice(1)))),
+    !running && onDismiss ? h('div', { class: 'actions' }, h('button', { class: 'btn', text: 'Done', onclick: onDismiss })) : null);
+}
+
+// Poll a running job every second, updating the panel and the clip card
+// rows in place; when it finishes, redraw the page with the summary.
+async function followJob(jobId, area, slots) {
+  let stopped = false;
+  state.cleanup.push(() => { stopped = true; });
+  while (!stopped) {
+    await new Promise((res) => setTimeout(res, 1000));
+    if (stopped) return;
+    let job;
+    try { job = await api(`/publish-jobs/${encodeURIComponent(jobId)}`); } catch { continue; }
+    area.replaceChildren(jobPanel(job));
+    for (const it of job.items) {
+      const slot = slots[`${it.file}:${it.platform}`];
+      if (slot) slot.replaceChildren(...liveRow(it));
+    }
     if (job.status !== 'running') {
-      const failed = job.results.filter((x) => x.error).length;
-      toast(failed ? `${failed} post(s) failed; see the log.` : 'Posted.', failed ? 'bad' : '');
-      status.replaceWith(pill(job.status, RUN_TONE[job.status]));
-      setTimeout(() => render(), 1500);
+      toast(job.failed ? `${job.failed} post(s) failed; see the details.` : 'All posted.', job.failed ? 'bad' : '');
+      render();
       return;
     }
-    await new Promise((res) => setTimeout(res, 1500));
   }
 }
 
