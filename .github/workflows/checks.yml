@@ -1,0 +1,34 @@
+# Checks every pull request to main: the unit tests, and the release rule
+# (CLAUDE.md "Versions"). A PR that changes more than the docs must bump
+# __version__ above main's and move its changelog entries to a dated
+# section, because every merge to main is a release. Make both jobs
+# required in the branch protection rules so a PR can't merge without them.
+name: checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      # The full requirements, so the API tests run instead of skipping.
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover tests
+
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the check diffs against the base branch
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/check_release.py "origin/${{ github.base_ref }}"

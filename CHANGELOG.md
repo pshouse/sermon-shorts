@@ -15,6 +15,12 @@ MINOR for new features, PATCH for fixes. The version lives in
   the weekly workflow now runs every half hour from 16:00 to 20:30 UTC, which
   covers 12:00-15:30 US Eastern all year.
 
+### Changed
+- Pull requests to `main` are checked by CI: the tests run, and a PR that
+  changes more than the docs fails unless it bumps the version and gives it a
+  dated changelog section (`scripts/check_release.py`). Merging a version bump
+  tags it `vX.Y.Z` automatically.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
