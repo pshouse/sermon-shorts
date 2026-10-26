@@ -11,7 +11,8 @@ MINOR for new features, PATCH for fixes. The version lives in
 ### Added
 - The Studio has a favicon.
 - A clip that has to be posted to Instagram by hand shows its caption (title and
-  description, as the API would post it) with a Copy caption button.
+  description, as the API would post it) with a Copy caption button, and a
+  Download cover button next to Download video.
 
 ### Changed
 - Posting shows its progress: while it runs, the Publish page shows a panel

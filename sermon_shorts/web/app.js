@@ -640,6 +640,7 @@ function platformRow(svc, clip, platform, base, canPublish) {
     return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
       h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app with this caption, then record the link here.` }),
       clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
+      clip.cover_url ? h('a', { href: clip.cover_url, download: clip.file.replace(/\.mp4$/i, '.jpg'), class: 'btn small', text: 'Download cover' }) : null,
       h('div', { class: 'caption-row' }, captionBox,
         h('button', { class: 'btn small', text: 'Copy caption', onclick: () => navigator.clipboard.writeText(caption)
           .then(() => toast('Caption copied.'), () => { selectText(captionBox); toast('Copy the selected caption.', 'bad'); }) })),
