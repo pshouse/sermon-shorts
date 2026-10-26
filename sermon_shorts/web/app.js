@@ -634,9 +634,15 @@ function platformRow(svc, clip, platform, base, canPublish) {
   if (platform === 'instagram' && clip.instagram_needs_manual) {
     const id = `manual-${clip.n}`;
     const url = h('input', { type: 'url', id, placeholder: 'https://www.instagram.com/reel/...' });
+    // The same caption the API would have posted (publish._caption), so a hand post matches.
+    const caption = `${clip.title}\n\n${clip.description || ''}`.trim().slice(0, 2200);
+    const captionBox = h('p', { class: 'box caption', text: caption });
     return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
-      h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app, then record the link here.` }),
+      h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app with this caption, then record the link here.` }),
       clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
+      h('div', { class: 'caption-row' }, captionBox,
+        h('button', { class: 'btn small', text: 'Copy caption', onclick: () => navigator.clipboard.writeText(caption)
+          .then(() => toast('Caption copied.'), () => { selectText(captionBox); toast('Copy the selected caption.', 'bad'); }) })),
       canPublish ? h('div', { class: 'inline-form' },
         h('label', { for: id, class: 'sr' }, 'Instagram link'), url,
         h('button', { class: 'btn small primary', text: 'Mark as posted', onclick: (e) => {
@@ -646,6 +652,15 @@ function platformRow(svc, clip, platform, base, canPublish) {
   }
   return h('div', { class: 'platform' }, name, pill('Not posted'),
     h('span', { class: 'platform-detail muted', text: 'Approved; choose it above to post.' }));
+}
+
+// Selects an element's text, for when the clipboard isn't available.
+function selectText(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 // --- posting progress ----------------------------------------------------------

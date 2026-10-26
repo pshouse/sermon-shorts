@@ -131,6 +131,8 @@ details.card summary { cursor: pointer; min-height: 44px; display: flex; align-i
 .platform-detail { flex: 1 1 240px; min-width: 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 100%; }
 .inline-form input { flex: 1 1 260px; width: auto; }
+.caption-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; flex: 1 1 100%; }
+.caption-row .caption { flex: 1 1 260px; min-width: 0; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 .plan { border: 2px solid var(--accent); }
 .joblog { margin: 0; padding: 12px; background: var(--ink); color: #E6E8EC; border-radius: 8px; font: 13px/1.5 var(--mono); max-height: 360px; overflow: auto; white-space: pre-wrap; }
