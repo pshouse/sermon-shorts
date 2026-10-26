@@ -45,6 +45,42 @@ class VersionTest(unittest.TestCase):
             self.assertIsNone(version.python_changed_since("abc1234"))
 
 
+class ReleaseCheckTest(unittest.TestCase):
+    CHANGELOG = "## [Unreleased]\n\n## [0.3.1] - 2026-10-26\n\n## [0.3.0] - 2026-10-26\n"
+
+    def test_docs_only_changes_need_no_release(self):
+        changed = ["README.md", "CLAUDE.md", "docs/api-design.md"]
+        self.assertFalse(version.needs_release(changed))
+        self.assertEqual(version.release_problems("0.3.0", "0.3.0", changed, ""), [])
+
+    def test_workflows_and_tests_need_a_release(self):
+        self.assertTrue(version.needs_release([".github/workflows/weekly.yml"]))
+        self.assertTrue(version.needs_release(["tests/test_schedule.py"]))
+        self.assertTrue(version.needs_release(["docs.py"]))  # not the docs/ folder
+
+    def test_a_bump_with_a_dated_section_passes(self):
+        self.assertEqual(version.release_problems("0.3.0", "0.3.1", ["x.py"], self.CHANGELOG), [])
+
+    def test_a_forgotten_bump_fails(self):
+        problems = version.release_problems("0.3.0", "0.3.0", ["x.py"], self.CHANGELOG)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("bump __version__", problems[0])
+        self.assertTrue(version.release_problems("0.3.1", "0.3.0", ["x.py"], self.CHANGELOG))  # a downgrade
+
+    def test_a_bump_left_under_unreleased_fails(self):
+        changelog = "## [Unreleased]\n\n### Fixed\n- x\n\n## [0.3.0] - 2026-10-26\n"
+        problems = version.release_problems("0.3.0", "0.3.1", ["x.py"], changelog)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("## [0.3.1] - YYYY-MM-DD", problems[0])
+        undated = "## [Unreleased]\n\n## [0.3.1]\n"
+        self.assertTrue(version.release_problems("0.3.0", "0.3.1", ["x.py"], undated))
+
+    def test_minor_and_major_bumps_compare_as_numbers(self):
+        changelog = "## [0.10.0] - 2026-10-26\n## [1.0.0] - 2026-10-26\n"
+        self.assertEqual(version.release_problems("0.9.4", "0.10.0", ["x.py"], changelog), [])
+        self.assertEqual(version.release_problems("0.10.0", "1.0.0", ["x.py"], changelog), [])
+
+
 class RunsRecordTheCodeTest(unittest.TestCase):
     def test_a_run_records_the_version_that_made_it(self):
         with tempfile.TemporaryDirectory() as tmp, \

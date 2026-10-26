@@ -38,6 +38,19 @@ class ScheduleTest(unittest.TestCase):
         finally:
             self.crons.start()
 
+    def test_the_real_workflow_covers_the_afternoon_in_both_seasons(self):
+        self.crons.stop()
+        try:
+            ny = schedule.ZoneInfo("America/New_York")
+            # A Sunday in daylight time and one after it ends (2026-11-01).
+            for sunday in ("2026-10-25", "2026-11-08"):
+                start = datetime.fromisoformat(sunday + "T00:00:00+00:00")
+                local = {t.astimezone(ny).strftime("%H:%M") for t in schedule.fire_times(start, days=1)}
+                wanted = {f"{h:02d}:{m:02d}" for h in range(12, 16) for m in (0, 30)}
+                self.assertLessEqual(wanted, local, sunday)
+        finally:
+            self.crons.start()
+
     def test_fire_times_follow_the_cron(self):
         start = datetime(2026, 10, 25, 17, 10, tzinfo=timezone.utc)  # a Sunday, mid-window
         times = schedule.fire_times(start, days=8)

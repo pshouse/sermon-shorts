@@ -8,6 +8,19 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-26
+
+### Fixed
+- The Sunday checks no longer end an hour early after daylight saving time ends:
+  the weekly workflow now runs every half hour from 16:00 to 20:30 UTC, which
+  covers 12:00-15:30 US Eastern all year.
+
+### Changed
+- Pull requests to `main` are checked by CI: the tests run, and a PR that
+  changes more than the docs fails unless it bumps the version and gives it a
+  dated changelog section (`scripts/check_release.py`). Merging a version bump
+  tags it `vX.Y.Z` automatically.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
@@ -92,7 +105,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pshouse/sermon-shorts/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pshouse/sermon-shorts/releases/tag/v0.1.0

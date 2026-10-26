@@ -386,7 +386,7 @@ over plain http).
 
 Scheduled runs happen on the days and times in
 `.github/workflows/weekly.yml` (Sundays, every half hour from 16:00 to
-19:30 UTC). The Studio's **Schedule** page shows the coming checks in your
+20:30 UTC, which covers 12:00-15:30 US Eastern in both summer and winter time). The Studio's **Schedule** page shows the coming checks in your
 own timezone and the recent scheduled runs; owners can pause all scheduled
 runs or skip a date there. From the command line:
 

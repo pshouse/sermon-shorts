@@ -1,0 +1,31 @@
+# Tags each release on main as vX.Y.Z once its version bump is merged, so
+# nobody has to tag by hand. The checks workflow makes sure every PR that
+# needs a release carries a bump; a version that is already tagged is left
+# alone.
+name: release-tag
+
+on:
+  push:
+    branches: [main]
+    paths: [sermon_shorts/__init__.py]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag the version
+        run: |
+          v=$(python3 -c 'from sermon_shorts import __version__; print(__version__)')
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            echo "v$v is already tagged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$v" -m "Release $v"
+          git push origin "v$v"
+          echo "Tagged v$v"

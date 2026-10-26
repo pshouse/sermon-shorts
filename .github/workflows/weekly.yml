@@ -13,8 +13,12 @@ name: weekly
 
 on:
   schedule:
-    # 12:00-15:30 US Eastern on Sundays (UTC, so it drifts an hour with DST)
-    - cron: "0,30 16-19 * * 0"
+    # Covers 12:00-15:30 US Eastern on Sundays all year. GitHub cron is UTC,
+    # so 16:00-20:30 UTC is 12:00-16:30 EDT in summer and 11:00-15:30 EST in
+    # winter; the extra checks at either end cost nothing because --weekly
+    # stops quickly once the service's clips exist. One fixed line beats
+    # editing the cron each March and November.
+    - cron: "0,30 16-20 * * 0"
   workflow_dispatch:
     inputs:
       labeler:
