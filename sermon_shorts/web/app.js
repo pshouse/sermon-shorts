@@ -631,28 +631,45 @@ function platformRow(svc, clip, platform, base, canPublish) {
     return h('div', { class: 'platform' }, name, pill('Not posted'),
       h('span', { class: 'platform-detail muted', text: 'Waiting for approval.' }));
   }
+  const refused = clip.failed && clip.failed[platform];
   if (platform === 'instagram' && clip.instagram_needs_manual) {
-    const id = `manual-${clip.n}`;
-    const url = h('input', { type: 'url', id, placeholder: 'https://www.instagram.com/reel/...' });
-    // The same caption the API would have posted (publish._caption), so a hand post matches.
-    const caption = `${clip.title}\n\n${clip.description || ''}`.trim().slice(0, 2200);
-    const captionBox = h('p', { class: 'box caption', text: caption });
-    return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
-      h('span', { class: 'platform-detail', text: `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app with this caption, then record the link here.` }),
-      clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
-      clip.cover_url ? h('a', { href: clip.cover_url, download: clip.file.replace(/\.mp4$/i, '.jpg'), class: 'btn small', text: 'Download cover' }) : null,
-      h('div', { class: 'caption-row' }, captionBox,
-        h('button', { class: 'btn small', text: 'Copy caption', onclick: () => navigator.clipboard.writeText(caption)
-          .then(() => toast('Caption copied.'), () => { selectText(captionBox); toast('Copy the selected caption.', 'bad'); }) })),
-      canPublish ? h('div', { class: 'inline-form' },
-        h('label', { for: id, class: 'sr' }, 'Instagram link'), url,
-        h('button', { class: 'btn small primary', text: 'Mark as posted', onclick: (e) => {
-          if (!/^https?:\/\//.test(url.value.trim())) { toast('Paste the post\'s link first.', 'bad'); url.focus(); return; }
-          act(e.currentTarget, () => api(`${path}/instagram/manual`, { method: 'POST', body: { url: url.value.trim() } }), { done: 'Recorded.' });
-        } })) : null);
+    return manualRow(clip, platform, name, path, canPublish,
+      `${Math.round(clip.seconds)}s is over the API limit of 65s. Upload it from the Instagram app with this caption, then record the link here.`);
+  }
+  if (refused) {
+    // Meta marks some refusals non-retriable, so a retry from here would fail
+    // the same way; the post can still go up from the platform's own app.
+    return manualRow(clip, platform, name, path, canPublish,
+      `${PLATFORM_NAMES[platform]} refused the post ${when(refused.at)}: ${refused.error} `
+      + `You can choose it above to try again, or upload it from the ${PLATFORM_NAMES[platform]} app with this caption and record the link here.`);
   }
   return h('div', { class: 'platform' }, name, pill('Not posted'),
     h('span', { class: 'platform-detail muted', text: 'Approved; choose it above to post.' }));
+}
+
+const MANUAL_URL_HINT = { youtube: 'https://youtube.com/shorts/...',
+  instagram: 'https://www.instagram.com/reel/...', facebook: 'https://www.facebook.com/reel/...' };
+
+// The hand-post helpers for one platform: download buttons, the caption the
+// API would have posted (publish._caption), and a field to record the link.
+function manualRow(clip, platform, name, path, canPublish, why) {
+  const id = `manual-${clip.n}-${platform}`;
+  const url = h('input', { type: 'url', id, placeholder: MANUAL_URL_HINT[platform] });
+  const caption = `${clip.title}\n\n${clip.description || ''}`.trim().slice(0, 2200);
+  const captionBox = h('p', { class: 'box caption', text: caption });
+  return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
+    h('span', { class: 'platform-detail', text: why }),
+    clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
+    clip.cover_url ? h('a', { href: clip.cover_url, download: clip.file.replace(/\.mp4$/i, '.jpg'), class: 'btn small', text: 'Download cover' }) : null,
+    h('div', { class: 'caption-row' }, captionBox,
+      h('button', { class: 'btn small', text: 'Copy caption', onclick: () => navigator.clipboard.writeText(caption)
+        .then(() => toast('Caption copied.'), () => { selectText(captionBox); toast('Copy the selected caption.', 'bad'); }) })),
+    canPublish ? h('div', { class: 'inline-form' },
+      h('label', { for: id, class: 'sr' }, `${PLATFORM_NAMES[platform]} link`), url,
+      h('button', { class: 'btn small primary', text: 'Mark as posted', onclick: (e) => {
+        if (!/^https?:\/\//.test(url.value.trim())) { toast('Paste the post\'s link first.', 'bad'); url.focus(); return; }
+        act(e.currentTarget, () => api(`${path}/${platform}/manual`, { method: 'POST', body: { url: url.value.trim() } }), { done: 'Recorded.' });
+      } })) : null);
 }
 
 // Selects an element's text, for when the clipboard isn't available.

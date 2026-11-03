@@ -301,7 +301,10 @@ Facebook Reels get the designed cover.
 
 Instagram's API also rejects Reels longer than about 65 seconds (an opaque
 `ProcessingFailedError`, regardless of file size). `publish` skips Instagram
-for longer clips and says so — post those from the Instagram app.
+for longer clips and says so — post those from the Instagram app. Shorter
+clips are occasionally refused with the same error; when that happens the
+Studio's Publish page offers the same hand-post helpers (download, caption,
+Mark as posted) for that platform, and the clip can also be tried again.
 
 ## People and roles
 

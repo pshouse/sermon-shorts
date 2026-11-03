@@ -205,6 +205,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(len(self.posted), 5)  # 2 + 3 platforms, minus Instagram for the 79s clip
         s = self.client.get(f"{base}", headers=self.as_(self.reviewer_token)).json()
         self.assertEqual(s["clips"][0]["posts"]["youtube"]["by_login"], "abe")
+        self.assertEqual(s["clips"][0]["failed"], {})
         self.assertEqual([i["kind"] for i in s["needs_you"]], ["manual"])
 
         r = self.client.post(f"{base}/clips/01_clip.mp4/posts/instagram/manual",
