@@ -8,6 +8,29 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
+### Added
+- A hand record can be taken back: **Remove this record** on a "Posted by hand"
+  row in the Studio, `DELETE .../posts/{platform}/manual` in the API, and
+  `unmark-posted N PLATFORM` on the command line. The post itself is untouched,
+  the removal is audited as `post.withdrawn`, and the clip is owed again. Posts
+  the API made cannot be taken back.
+
+### Fixed
+- Mark as posted and `mark-posted` refuse a link from the wrong site: an
+  Instagram row only takes instagram.com links, and so on (on Nov 2 two
+  Instagram rows were recorded with the Facebook reel's link). The Studio says
+  which site the pasted link is from before sending it.
+
+## [0.4.1] - 2026-11-03
+
+### Added
+- Every "Post by hand" row in the Studio has a fold-out "How to post it from
+  the ... app" with numbered steps: Instagram in full (save the video and cover
+  to the camera roll, Reel, Edit cover, paste the caption, Share, Copy link),
+  shorter ones for Facebook and YouTube. README has the Instagram steps too.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added
@@ -116,7 +139,9 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pshouse/sermon-shorts/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...v0.3.0

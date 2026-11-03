@@ -101,6 +101,67 @@ def plan_id(jobs: list[dict], skipped: list[dict]) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
 
 
+# --- hand-recorded posts ----------------------------------------------------
+
+# Where each platform's post links live. A hand record with a link from the
+# wrong site is refused: on 2026-11-02 two Instagram rows were recorded with
+# the Facebook reel's link by mistake, and nothing caught it.
+PLATFORM_HOSTS = {
+    "youtube": ("youtube.com", "youtu.be"),
+    "instagram": ("instagram.com", "instagr.am"),
+    "facebook": ("facebook.com", "fb.com", "fb.watch"),
+}
+PLATFORM_NAMES = {"youtube": "YouTube", "instagram": "Instagram", "facebook": "Facebook"}
+
+
+def _site(url: str) -> str | None:
+    """Which platform a link belongs to, or None."""
+    from urllib.parse import urlsplit
+    host = (urlsplit(url.strip()).hostname or "").lower()
+    for platform, hosts in PLATFORM_HOSTS.items():
+        if any(host == h or host.endswith("." + h) for h in hosts):
+            return platform
+    return None
+
+
+def check_manual_url(platform: str, url: str) -> str | None:
+    """Why `url` can't be recorded as a hand post on `platform`, or None if it can."""
+    url = url.strip()
+    if not url.startswith(("https://", "http://")):
+        return "Give the post's link."
+    site = _site(url)
+    name = PLATFORM_NAMES[platform]
+    if site == platform:
+        return None
+    if site:
+        return f"That's a {PLATFORM_NAMES[site]} link; paste the {name} post's link."
+    return f"That doesn't look like a {name} link ({', '.join(PLATFORM_HOSTS[platform])})."
+
+
+def withdraw_manual(conn: sqlite3.Connection, actor: Actor, service_id: str, folder: Path,
+                    file: str, platform: str, reason: str = "") -> dict:
+    """Remove a post that was recorded by hand (a wrong link, or never actually
+    posted). Only hand records can go: a post the API made is really live.
+    Returns the removed row. The removal is audited; the row leaves `posts`
+    and the ledger so the clip is owed again."""
+    row = conn.execute("SELECT * FROM posts WHERE service_id = ? AND file = ? AND platform = ?",
+                       (service_id, file, platform)).fetchone()
+    if not row:
+        raise LookupError(f"{file} has no {platform} post recorded")
+    if not row["manual"]:
+        raise PermissionError(f"the {platform} post of {file} was made by the API; "
+                              "it is live and can't be unrecorded")
+    with write(conn):
+        conn.execute("DELETE FROM posts WHERE service_id = ? AND file = ? AND platform = ?",
+                     (service_id, file, platform))
+        audit.record(conn, actor, "post.withdrawn", service=service_id, clip=file,
+                     platform=platform, url=row["url"], reason=reason or None)
+    ledger = load_ledger(folder)
+    if ledger.get(file, {}).pop(platform, None) is not None:
+        (folder / LEDGER).write_text(json.dumps(ledger, indent=2), encoding="utf-8")
+    return dict(row)
+
+
 # --- recording --------------------------------------------------------------
 
 def record_post(conn: sqlite3.Connection, actor: Actor, service_id: str, file: str,

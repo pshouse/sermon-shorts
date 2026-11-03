@@ -10,7 +10,7 @@ if len(sys.argv) > 1 and sys.argv[1] in ("--version", "version"):
 if len(sys.argv) > 1 and sys.argv[1] in ("users", "audit"):
     from .accounts_cli import users_main, audit_main
     raise SystemExit((users_main if sys.argv[1] == "users" else audit_main)(sys.argv[2:]))
-if len(sys.argv) > 1 and sys.argv[1] in ("approve", "reject", "note", "mark-posted", "retry-cover"):
+if len(sys.argv) > 1 and sys.argv[1] in ("approve", "reject", "note", "mark-posted", "unmark-posted", "retry-cover"):
     from .review_cli import main as review_main
     raise SystemExit(review_main(sys.argv[1], sys.argv[2:]))
 if len(sys.argv) > 1 and sys.argv[1] == "serve":

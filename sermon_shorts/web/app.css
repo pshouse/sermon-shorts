@@ -131,6 +131,10 @@ details.card summary { cursor: pointer; min-height: 44px; display: flex; align-i
 .platform-detail { flex: 1 1 240px; min-width: 0; font-size: 14px; color: var(--ink-2); overflow-wrap: anywhere; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 100%; }
 .inline-form input { flex: 1 1 260px; width: auto; }
+.steps { flex: 1 1 100%; font-size: 14px; color: var(--ink-2); }
+.steps summary { cursor: pointer; color: var(--accent); }
+.steps ol { margin: 8px 0 0; padding-left: 22px; }
+.steps li { margin: 4px 0; }
 .caption-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; flex: 1 1 100%; }
 .caption-row .caption { flex: 1 1 260px; min-width: 0; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 

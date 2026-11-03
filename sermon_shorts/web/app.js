@@ -516,7 +516,7 @@ async function pageReview(r) {
 const AUDIT_LABELS = {
   'clip.approved': 'Approved', 'clip.rejected': 'Rejected', 'clip.noted': 'Note',
   'clip.rendered': 'Rendered', 'clip.imported': 'Imported', 'post.created': 'Posted',
-  'post.marked_manual': 'Posted by hand', 'post.failed': 'Post failed', 'post.imported': 'Post imported',
+  'post.marked_manual': 'Posted by hand', 'post.withdrawn': 'Hand record removed', 'post.failed': 'Post failed', 'post.imported': 'Post imported',
   'cover.set': 'Cover set', 'cover.failed': 'Cover failed', 'publish.planned': 'Previewed a publish',
   'run.finished': 'Run finished', 'run.failed': 'Run failed', 'run.requested': 'Run requested',
   'run.cancel_requested': 'Cancel requested', 'sermon.found': 'Found the sermon',
@@ -625,6 +625,14 @@ function platformRow(svc, clip, platform, base, canPublish) {
       coverFailed && platform === 'youtube' && canPublish
         ? h('button', { class: 'btn small primary', text: 'Retry cover upload', onclick: (e) =>
           act(e.currentTarget, () => api(`${path}/youtube/cover`, { method: 'POST' }), { done: 'Cover set.' }) })
+        : null,
+      // A hand record can be wrong (a pasted link from the wrong site, or a post
+      // that never went up); only those can be taken back, API posts are live.
+      post.manual && canPublish
+        ? h('button', { class: 'btn small', text: 'Remove this record', onclick: (e) => {
+          if (!confirm(`Remove the record that "${clip.title}" was posted to ${PLATFORM_NAMES[platform]} by hand? The post itself is not touched; the clip shows as owed again so you can record the right link.`)) return;
+          act(e.currentTarget, () => api(`${path}/${platform}/manual`, { method: 'DELETE' }), { done: 'Record removed.' });
+        } })
         : null);
   }
   if (clip.review_state !== 'approved') {
@@ -649,6 +657,43 @@ function platformRow(svc, clip, platform, base, canPublish) {
 
 const MANUAL_URL_HINT = { youtube: 'https://youtube.com/shorts/...',
   instagram: 'https://www.instagram.com/reel/...', facebook: 'https://www.facebook.com/reel/...' };
+// Same rule as core/posts.PLATFORM_HOSTS; the server checks too, this just says so sooner.
+const PLATFORM_HOSTS = { youtube: ['youtube.com', 'youtu.be'], instagram: ['instagram.com', 'instagr.am'],
+  facebook: ['facebook.com', 'fb.com', 'fb.watch'] };
+
+function linkProblem(platform, url) {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return 'Paste the post\'s link first.'; }
+  const site = Object.keys(PLATFORM_HOSTS).find((p) => PLATFORM_HOSTS[p].some((d) => host === d || host.endsWith('.' + d)));
+  if (site === platform) return null;
+  if (site) return `That's a ${PLATFORM_NAMES[site]} link; paste the ${PLATFORM_NAMES[platform]} post's link.`;
+  return `That doesn't look like a ${PLATFORM_NAMES[platform]} link.`;
+}
+
+// How to make the post in each platform's own app. Written for a phone, which
+// is where Instagram allows uploads; the steps mirror what the API would have
+// done (the designed cover, the same caption, shared to the feed as well).
+const MANUAL_STEPS = {
+  instagram: [
+    'Open this page on your phone and tap Download video, then Download cover. Save both to your camera roll (on iPhone: Share, then Save Video / Save Image).',
+    'In Instagram, tap +, choose Reel, pick the video and tap Next. The clip is already cut, so skip trimming and effects.',
+    'On the final screen tap Edit cover, then Add from camera roll, and pick the cover image.',
+    'Tap Copy caption here and paste it into the caption box. Leave "Also share to feed" on.',
+    'Tap Share. Open the posted reel, tap the three dots, choose Copy link, and paste it below.',
+  ],
+  facebook: [
+    'Download the video and cover to the device you will post from.',
+    'In the Facebook app, switch to the Page, tap Reel, pick the video and tap Next.',
+    'Paste the caption (Copy caption here), set the cover from the downloaded image, and tap Share to Reels.',
+    'Open the posted reel, choose Share, then Copy link, and paste it below.',
+  ],
+  youtube: [
+    'Download the video and cover to the device you will post from.',
+    'In the YouTube app or Studio, upload the video as a Short, titled with the first line of the caption and the rest as the description.',
+    'Set the cover as the thumbnail if the channel allows custom thumbnails.',
+    'Copy the Short\'s link from Share and paste it below.',
+  ],
+};
 
 // The hand-post helpers for one platform: download buttons, the caption the
 // API would have posted (publish._caption), and a field to record the link.
@@ -659,6 +704,9 @@ function manualRow(clip, platform, name, path, canPublish, why) {
   const captionBox = h('p', { class: 'box caption', text: caption });
   return h('div', { class: 'platform' }, name, pill('Post by hand', 'warn'),
     h('span', { class: 'platform-detail', text: why }),
+    h('details', { class: 'steps' },
+      h('summary', {}, `How to post it from the ${PLATFORM_NAMES[platform]} app`),
+      h('ol', {}, MANUAL_STEPS[platform].map((step) => h('li', { text: step })))),
     clip.video_url ? h('a', { href: clip.video_url, download: clip.file, class: 'btn small', text: 'Download video' }) : null,
     clip.cover_url ? h('a', { href: clip.cover_url, download: clip.file.replace(/\.mp4$/i, '.jpg'), class: 'btn small', text: 'Download cover' }) : null,
     h('div', { class: 'caption-row' }, captionBox,
@@ -667,7 +715,8 @@ function manualRow(clip, platform, name, path, canPublish, why) {
     canPublish ? h('div', { class: 'inline-form' },
       h('label', { for: id, class: 'sr' }, `${PLATFORM_NAMES[platform]} link`), url,
       h('button', { class: 'btn small primary', text: 'Mark as posted', onclick: (e) => {
-        if (!/^https?:\/\//.test(url.value.trim())) { toast('Paste the post\'s link first.', 'bad'); url.focus(); return; }
+        const problem = linkProblem(platform, url.value.trim());
+        if (problem) { toast(problem, 'bad'); url.focus(); return; }
         act(e.currentTarget, () => api(`${path}/${platform}/manual`, { method: 'POST', body: { url: url.value.trim() } }), { done: 'Recorded.' });
       } })) : null);
 }
