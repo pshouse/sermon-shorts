@@ -201,6 +201,8 @@ sprite exec -s sermon-shorts -- bash -lc 'cd ~/sermon-shorts && .venv/bin/python
 
 (`sprite exec` gives no terminal to answer the confirmation prompt, so
 `publish` there always needs `--yes`; check with `--dry-run` first.)
+Queued posts (`publish --spread`) go out from the sprite on their day
+through `.github/workflows/posting.yml`.
 
 ## Publishing
 
@@ -235,7 +237,43 @@ does both, `publish --approve` records the approval and posts in one step.
 | `--yes` | skip the confirmation prompt |
 | `--as LOGIN` | who is posting (default: `$SERMON_SHORTS_USER`) |
 | `--approve` | also approve the named clips that aren't yet, once you confirm |
+| `--spread` | queue the clips one a day over the week instead of posting now (below) |
+| `--due` | post the queued clips whose day has come (what the posting workflow runs) |
+| `--queue` | list the queued posts |
+| `--cancel` | take the named clips out of the queue |
 | `--connect youtube` / `--connect meta` | one-time account setup (below) |
+
+### Spreading posts over the week
+
+Clips posted together compete with each other: each platform shows a
+channel's newest short ahead of the ones before it, so most of a Sunday
+batch is seen by almost nobody. `--spread` queues them one clip a day
+instead:
+
+```
+python -m sermon_shorts publish 1 2 3 --spread      # Mon, Wed, Fri at 12:00
+python -m sermon_shorts publish --queue             # what's waiting, and the next check
+python -m sermon_shorts publish 2 --cancel          # take clip 2 out again
+```
+
+The days are Monday to Saturday at 12:00 in the church's timezone, spread
+evenly over the days left before Sunday (queue three clips on a Sunday
+evening and they go out Monday, Wednesday and Friday); more clips than days
+continue into the next week, still one a day. The Studio does the same:
+Preview on the Publish page shows each clip's day next to **Spread over the
+week**, and a queued clip shows **Take out of the queue** on its row and in
+the Schedule page's **Queued posts** list.
+
+Nothing posts itself: `publish --due` posts whatever is due, and on the
+sprite `.github/workflows/posting.yml` runs it (`scripts/sprite_posting.sh`)
+Monday to Saturday at 16:00 and 17:00 UTC, which is noon US Eastern in both
+summer and winter time, so each clip goes out at noon on its day. It needs
+the same `SPRITES_TOKEN` secret as the weekly run. On a home computer, run
+`publish --due` yourself (or from a daily launchd/cron entry). A queued post
+goes through the same gate as any other when its day comes: if the clip was
+re-rendered, rejected or posted by hand in the meantime it is held with the
+reason and shows as owed again. Each post is made as the person who queued
+it; if they are no longer a member, it is held too.
 
 Reviewing and following up:
 
@@ -432,7 +470,9 @@ python -m sermon_shorts schedule unskip 2026-12-27
 ```
 
 A held run is recorded as skipped. Run now, manual GitHub runs and the
-command line always go ahead.
+command line always go ahead. The same page lists the queued posts (see
+[Spreading posts over the week](#spreading-posts-over-the-week)); pausing
+the Sunday runs does not hold them, take them out of the queue instead.
 
 ### Versions
 

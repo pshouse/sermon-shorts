@@ -296,6 +296,13 @@ and a failed latest run.
 | POST | `/services/{sid}/publish` | body `{"plan_id": "..."}`. `409 plan_changed` if stale, otherwise `202 {"run_id"}`. Posts go out in a background job, one `post.created`/`post.failed` event each |
 | POST | `/services/{sid}/clips/{file}/posts/{platform}/manual` | body `{"url": "...", "note": ""}`. Records a post made by hand (Instagram over 65s) |
 | POST | `/services/{sid}/clips/{file}/posts/youtube/cover` | Retries the cover upload; `cover.set` or `cover.failed` |
+| GET | `/scheduled` | Built later (0.6.0): every post queued with `"spread": true`, soonest first, and when the posting workflow next checks |
+| DELETE | `/services/{sid}/clips/{file}/scheduled[/{platform}]` | Takes a queued post out again (`post.schedule_cancelled`) |
+
+Built later (0.6.0): a plan also carries `spread`, the same posts one clip a
+day over the week, and `POST .../publish` with `"spread": true` queues them
+(`201`, the `scheduled_posts` rows) instead of posting. `publish --due`
+posts the due ones through the same gate, as the person who queued them.
 
 `plan_id = sha256(posts + skipped + every involved fingerprint + ledger state)`,
 so it needs no server-side storage and expires itself when anything moves.

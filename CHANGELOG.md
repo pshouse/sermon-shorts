@@ -8,6 +8,34 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-03
+
+### Added
+- Clips can be spread over the week instead of posted all at once, so they
+  don't compete with each other: `publish N... --spread` on the command line,
+  or Preview then **Spread over the week** on the Studio's Publish page. Each
+  clip gets its own day, Monday to Saturday at 12:00 church time, spread
+  evenly over the days left before Sunday (more clips than days continue the
+  next week, still one a day). Queued posts go out through the same gate as
+  any other: a clip re-rendered, rejected or posted by hand in the meantime is
+  held with the reason, never posted. Every post is made as the person who
+  queued it (`via = "schedule"`) and audited as `post.scheduled`,
+  `post.schedule_cancelled` and `post.schedule_held`.
+- `publish --due` posts what is due, `publish --queue` lists the queue, and
+  `publish N --cancel` takes a clip out of it. On the sprite the new
+  `.github/workflows/posting.yml` runs `scripts/sprite_posting.sh` Monday to
+  Saturday at 16:00 and 17:00 UTC (noon US Eastern in both seasons), the same
+  way `weekly.yml` runs the Sunday job; it needs the same `SPRITES_TOKEN`.
+- The Studio shows queued posts on each clip (with **Take out of the queue**),
+  on the Week page's pills, and in a new **Queued posts** section of the
+  Schedule page with the next posting check. The API has `GET /scheduled`,
+  `"spread": true` on `POST .../publish` (returns `201` with the rows instead
+  of posting), `DELETE .../clips/{file}/scheduled[/{platform}]`, a `spread`
+  proposal on every publish plan, and `scheduled` on each clip.
+
+### Changed
+- Database schema 6 adds the `scheduled_posts` table (applied on first use).
+
 ## [0.5.0] - 2026-11-03
 
 ### Added
@@ -139,7 +167,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pshouse/sermon-shorts/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...v0.4.0

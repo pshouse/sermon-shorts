@@ -10,6 +10,10 @@ Only clips whose latest decision approves them exactly as they are on disk
 are posted (core/review.py). Each post is recorded in the folder's
 published.json and the database, so re-running the same command never posts
 a clip to the same platform twice.
+
+Clips posted together compete with each other, so `publish ... --spread`
+queues them one a day over the week instead (core/scheduled.py), and
+`publish --due` posts the ones whose day has come.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv, set_key
 
-from .core import posts, records, review, users
+from .core import posts, records, review, scheduled, users
 from .core.audit import Actor
 from .core.db import connect
 from .core.posts import LEDGER, PLATFORMS
@@ -373,6 +377,16 @@ def main(argv: list[str]) -> int:
                         help="also record your approval of the named clips that aren't "
                              "approved yet (one person reviewing and posting)")
     parser.add_argument("--note", default="", help="with --approve: a note for the record")
+    parser.add_argument("--spread", action="store_true",
+                        help="don't post now: queue the clips one a day over the week "
+                             f"(Mon-Sat at {scheduled.POST_HOUR:02d}:{scheduled.POST_MINUTE:02d} "
+                             "church time); they go out when publish --due runs")
+    parser.add_argument("--due", action="store_true",
+                        help="post the queued clips whose day has come (the posting workflow "
+                             "runs this; needs no --as, each post is made as its scheduler)")
+    parser.add_argument("--queue", action="store_true", help="list the queued posts")
+    parser.add_argument("--cancel", action="store_true",
+                        help="take the named clips out of the queue instead of posting")
     parser.add_argument("--connect", choices=["youtube", "meta"],
                         help="one-time login: youtube (opens a browser) or meta "
                              "(Facebook Page + its linked Instagram)")
@@ -390,6 +404,11 @@ def main(argv: list[str]) -> int:
         return 0
 
     conn = connect()
+    if args.queue:
+        return _show_queue(conn)
+    if args.due:
+        return _post_due(conn, args.dry_run)
+
     login = args.as_user or os.environ.get(USER_ENV)
     user = users.get(conn, login) if login else None
     if login and user is None:
@@ -432,6 +451,8 @@ def main(argv: list[str]) -> int:
                  "publish --connect meta (see 'Publishing' in the README).")
 
     service_id = records.ensure_service(conn, actor, folder)
+    if args.cancel:
+        return _cancel(conn, user, service_id, clips, chosen, args.to, args.dry_run)
     jobs, skipped = posts.plan(conn, service_id, folder, chosen, platforms)
     to_approve = []
     if args.approve:
@@ -447,6 +468,9 @@ def main(argv: list[str]) -> int:
                   f"sermon-shorts approve {sk['n']} (or publish --approve)")
         elif sk["kind"] == "already":
             print(f"  already on {sk['platform']}: {title} — {sk['reason']}")
+        elif sk["kind"] == "scheduled":
+            print(f"  queued for {sk['platform']}: {title} — {sk['reason']} "
+                  f"(publish {sk['n']} --cancel takes it out)")
         else:
             print(f"  too long for Instagram's API ({sk['reason']}) — post it from the "
                   f"Instagram app, then: sermon-shorts mark-posted {sk['n']} instagram --url URL")
@@ -457,16 +481,26 @@ def main(argv: list[str]) -> int:
     if to_approve:
         names = ", ".join(clips[n - 1]["title"] for n in to_approve)
         print(f"\nWill record your approval ({actor.login}) of: {names}")
-    print("\nAbout to post PUBLICLY:")
-    for job in jobs:
-        print(f"  {job['platform']:<9} {job['entry']['title']}")
+    times = {}
+    if args.spread:
+        order = list(dict.fromkeys(j["n"] for j in jobs))
+        times = dict(zip(order, scheduled.spread(len(order))))
+        print("\nWill queue, one clip a day (they post PUBLICLY when publish --due runs):")
+        for n in order:
+            on = ", ".join(j["platform"] for j in jobs if j["n"] == n)
+            print(f"  {scheduled.when_local(scheduled.iso(times[n]))}  {clips[n - 1]['title']}  ({on})")
+    else:
+        print("\nAbout to post PUBLICLY:")
+        for job in jobs:
+            print(f"  {job['platform']:<9} {job['entry']['title']}")
     if args.dry_run:
-        print("(dry run — nothing posted)")
+        print("(dry run — nothing " + ("queued)" if args.spread else "posted)"))
         return 0
     if not args.yes:
         if not sys.stdin.isatty():
             sys.exit("Not posting without confirmation — re-run with --yes.")
-        if input("Post now? [y/N] ").strip().lower() not in ("y", "yes"):
+        ask = "Queue these? [y/N] " if args.spread else "Post now? [y/N] "
+        if input(ask).strip().lower() not in ("y", "yes"):
             print("Cancelled.")
             return 1
 
@@ -477,10 +511,79 @@ def main(argv: list[str]) -> int:
         # Re-plan from the recorded decisions: what goes out is what the gate allows.
         jobs, _ = posts.plan(conn, service_id, folder, chosen, platforms)
 
+    if args.spread:
+        try:
+            rows = scheduled.schedule_posts(conn, user, service_id, jobs, times)
+        except scheduled.ScheduledError as e:
+            sys.exit(f"Not queued: {e}")
+        print(f"\nQueued {len(rows)} post(s). They go out at the next posting check after "
+              "their time (publish --due; the posting workflow runs it on the sprite). "
+              "See them with publish --queue.")
+        return 0
+
     results = post_jobs(conn, actor, service_id, folder, jobs, progress=_print_progress())
     failed = sum(1 for r in results if r["error"])
     print(f"\nDone — {len(jobs) - failed} posted, {failed} failed "
           f"(record in {folder / LEDGER})")
+    return 1 if failed else 0
+
+
+def _show_queue(conn) -> int:
+    rows = scheduled.upcoming(conn)
+    print("Queued posts (church time):" if rows else "Nothing is queued.")
+    for r in rows:
+        state = "" if r["status"] == scheduled.WAITING else f"  [{r['status']}]"
+        print(f"  {scheduled.when_local(r['post_at'])}  {r['platform']:<9} "
+              f"{r['title'] or r['file']}  ({r['service_id']}, by {r['by_login']}){state}")
+    o = scheduled.posting_overview(conn)
+    print(f"Next posting check: {scheduled.when_local(o['next_check']) if o['next_check'] else 'none found'} "
+          f"({o['workflow']}: {', '.join(o['crons']) or 'no cron'})")
+    return 0
+
+
+def _cancel(conn, user, service_id: str, clips: list[dict], chosen: list[int],
+            platforms: list[str] | None, dry_run: bool) -> int:
+    if dry_run:
+        queued = scheduled.waiting(conn, service_id)
+        for n in chosen:
+            for platform, r in queued.get(clips[n - 1]["file"], {}).items():
+                if not platforms or platform in platforms:
+                    print(f"  would cancel: {clips[n - 1]['title']} on {platform} "
+                          f"({scheduled.when_local(r['post_at'])})")
+        print("(dry run — nothing cancelled)")
+        return 0
+    for n in chosen:
+        entry = clips[n - 1]
+        for platform in platforms or [None]:
+            try:
+                rows = scheduled.cancel(conn, user, service_id, entry["file"], platform)
+            except scheduled.ScheduledError as e:
+                print(f"  {e}")
+                continue
+            for r in rows:
+                print(f"  cancelled: {entry['title']} on {r['platform']} "
+                      f"(was {scheduled.when_local(r['post_at'])})")
+    return 0
+
+
+def _post_due(conn, dry_run: bool) -> int:
+    """Post what the queue says is due. Run by the posting workflow."""
+    rows = scheduled.due(conn)
+    if not rows:
+        print("Nothing is due.")
+        return 0
+    if dry_run:
+        for r in rows:
+            print(f"  due: {r['file']} on {r['platform']} ({r['service_id']}, "
+                  f"{scheduled.when_local(r['post_at'])}, by {r['by_login']})")
+        print("(dry run — nothing posted)")
+        return 0
+    results = scheduled.post_due(conn, progress=_print_progress())
+    failed = [r for r in results if r["status"] != scheduled.POSTED]
+    for r in results:
+        if r["status"] != scheduled.POSTED:
+            print(f"  {r['status']}: {r['row']['file']} on {r['row']['platform']} — {r['outcome']}")
+    print(f"\nDone — {len(results) - len(failed)} posted, {len(failed)} held or failed.")
     return 1 if failed else 0
 
 

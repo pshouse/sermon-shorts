@@ -17,7 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_ENV = "SERMON_SHORTS_DB"
 DB_NAME = "sermon_shorts.db"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA_V1 = """
 CREATE TABLE users (
@@ -205,7 +205,7 @@ CREATE TABLE posts (
     url         TEXT,
     at          TEXT NOT NULL,
     by_login    TEXT,                  -- NULL for posts imported from before accounts
-    via         TEXT NOT NULL,         -- 'cli', 'web', 'manual' or 'import'
+    via         TEXT NOT NULL,         -- 'cli', 'web', 'manual', 'import' or 'schedule'
     manual      INTEGER NOT NULL DEFAULT 0,
     cover       TEXT,                  -- 'set', 'failed', or NULL (none attempted / unknown)
     fingerprint TEXT,                  -- the version that was posted
@@ -237,7 +237,29 @@ CREATE TABLE schedule_skips (
 );
 """
 
-MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4, 5: _SCHEMA_V5}
+# v6: posts waiting for their day (core/scheduled.py, `publish --spread`).
+_SCHEMA_V6 = """
+CREATE TABLE scheduled_posts (
+    id          INTEGER PRIMARY KEY,
+    service_id  TEXT NOT NULL REFERENCES services(id),
+    file        TEXT NOT NULL,
+    platform    TEXT NOT NULL CHECK (platform IN ('youtube', 'instagram', 'facebook')),
+    fingerprint TEXT NOT NULL,         -- the version that was approved when it was queued
+    post_at     TEXT NOT NULL,         -- UTC
+    by_login    TEXT NOT NULL,         -- the post is made as this person
+    via         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('waiting', 'posting', 'posted', 'failed', 'held', 'cancelled')),
+    claimed_at  TEXT,                  -- when a `publish --due` took it
+    outcome     TEXT,                  -- the post's url, the error, or why it was held
+    done_at     TEXT
+);
+CREATE INDEX scheduled_posts_due ON scheduled_posts(status, post_at);
+CREATE INDEX scheduled_posts_clip ON scheduled_posts(service_id, file, id);
+"""
+
+MIGRATIONS = {1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4, 5: _SCHEMA_V5,
+              6: _SCHEMA_V6}
 
 
 def db_path() -> Path:
