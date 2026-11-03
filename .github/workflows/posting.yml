@@ -1,0 +1,39 @@
+# Posts the clips queued with `publish --spread` when their day comes.
+#
+# Sprites have no scheduler, so this job wakes the sprite and runs
+# scripts/sprite_posting.sh there, which posts whatever is due and stops. The
+# queue holds one clip a day at 12:00 church time (core/scheduled.py), and
+# the times below are what make that true: 16:00 UTC is noon US Eastern in
+# summer and 17:00 UTC is noon in winter, so the first check at or after noon
+# posts the day's clip, and the other check finds nothing due. Mondays to
+# Saturdays only; Sunday is the next service's day.
+#
+# Needs the same SPRITES_TOKEN repository secret as weekly.yml.
+name: posting
+
+on:
+  schedule:
+    - cron: "0 16,17 * * 1-6"
+  workflow_dispatch:
+
+concurrency:
+  group: posting
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Install the sprite CLI
+        run: |
+          curl -fsSL https://sprites.dev/install.sh | sh -s -- --bin-dir "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate
+        run: sprite auth setup --token "${{ secrets.SPRITES_TOKEN }}"
+
+      - name: Post what is due on the sprite
+        run: |
+          sprite exec -s sermon-shorts --no-stdin -- \
+            /home/sprite/sermon-shorts/scripts/sprite_posting.sh

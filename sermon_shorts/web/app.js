@@ -298,6 +298,8 @@ function postPills(clip) {
     const post = clip.posts[p];
     if (post) return pill(post.cover === 'failed' ? `${PLATFORM_NAMES[p]} live, no cover` : `${PLATFORM_NAMES[p]} live`,
       post.cover === 'failed' ? 'warn' : '');
+    const q = clip.scheduled && clip.scheduled[p];
+    if (q && (q.status === 'waiting' || q.status === 'posting')) return pill(`${PLATFORM_NAMES[p]} ${when(q.post_at)}`, 'info');
     if (p === 'instagram' && clip.instagram_needs_manual && clip.review_state === 'approved')
       return pill('Instagram: post by hand', 'warn');
     return null;
@@ -517,6 +519,7 @@ const AUDIT_LABELS = {
   'clip.approved': 'Approved', 'clip.rejected': 'Rejected', 'clip.noted': 'Note',
   'clip.rendered': 'Rendered', 'clip.imported': 'Imported', 'post.created': 'Posted',
   'post.marked_manual': 'Posted by hand', 'post.withdrawn': 'Hand record removed', 'post.failed': 'Post failed', 'post.imported': 'Post imported',
+  'post.scheduled': 'Queued for a day', 'post.schedule_cancelled': 'Taken out of the queue', 'post.schedule_held': 'Queued post held',
   'cover.set': 'Cover set', 'cover.failed': 'Cover failed', 'publish.planned': 'Previewed a publish',
   'run.finished': 'Run finished', 'run.failed': 'Run failed', 'run.requested': 'Run requested',
   'run.cancel_requested': 'Cancel requested', 'sermon.found': 'Found the sermon',
@@ -558,9 +561,11 @@ async function pagePublish(r) {
     jobArea.append(jobPanel(finished, () => { state.dismissedJob = finished.id; jobArea.replaceChildren(); }));
   }
 
-  // Choose, preview, confirm.
+  // Choose, preview, confirm. A clip already waiting in the queue on every
+  // platform it could go to has nothing left to choose.
+  const queued = (c, p) => c.scheduled[p] && (c.scheduled[p].status === 'waiting' || c.scheduled[p].status === 'posting');
   const candidates = svc.clips.filter((c) => c.review_state === 'approved' &&
-    PLATFORMS.some((p) => !c.posts[p] && !(p === 'instagram' && c.instagram_needs_manual)));
+    PLATFORMS.some((p) => !c.posts[p] && !queued(c, p) && !(p === 'instagram' && c.instagram_needs_manual)));
   const boxes = candidates.map((c) => h('input', { type: 'checkbox', id: `pick-${c.n}`, value: c.file, checked: true }));
   const planArea = h('div', {});
 
@@ -568,16 +573,31 @@ async function pagePublish(r) {
     const posts = plan.posts.map((p) => h('li', {}, h('strong', { text: PLATFORM_NAMES[p.platform] }), ` · ${p.title}`));
     const skipped = plan.skipped.map((s) => h('li', { class: 'muted small',
       text: `${s.title}${s.platform ? ` on ${PLATFORM_NAMES[s.platform]}` : ''}: ${s.reason}` }));
+    // The same posts one clip a day: a day per clip, with its platforms.
+    const days = [];
+    for (const p of plan.spread || []) {
+      const day = days.find((d) => d.file === p.file) || days[days.push({ file: p.file, title: p.title, post_at: p.post_at, platforms: [] }) - 1];
+      day.platforms.push(PLATFORM_NAMES[p.platform]);
+    }
+    const spreadList = days.map((d) => h('li', {}, h('strong', { text: when(d.post_at) }), ` · ${d.title}`,
+      h('span', { class: 'muted small', text: ` (${d.platforms.join(', ')})` })));
+    const clips = days.length;
+    const publish = (body) => () => api(`${base}/publish`, { method: 'POST',
+      body: { clips: files, platforms: plan.platforms, plan_id: plan.plan_id, ...body } });
     planArea.replaceChildren(h('div', { class: 'card plan' },
-      h('h2', { text: plan.posts.length ? 'About to post publicly' : 'Nothing can be posted' }),
+      h('h2', { text: plan.posts.length ? 'Ready to go out' : 'Nothing can be posted' }),
       plan.posts.length ? h('ul', { class: 'list' }, posts) : null,
       skipped.length ? [h('h3', { text: 'Skipped' }), h('ul', { class: 'list' }, skipped)] : null,
-      plan.posts.length ? h('div', { class: 'actions' },
-        h('button', { class: 'btn danger', text: `Post publicly now (${plan.posts.length})`, onclick: (e) => act(e.currentTarget,
+      plan.posts.length ? [
+        h('h3', { text: clips > 1 ? 'Spread over the week, one clip a day' : 'Or on its own day' }),
+        h('ul', { class: 'list' }, spreadList),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', text: clips > 1 ? `Spread over the week (${clips} clips)` : `Post ${when(days[0].post_at)}`,
+            onclick: (e) => act(e.currentTarget, publish({ spread: true }), { done: 'Queued. Each clip posts on its day.' }) }),
           // The page redraws in posting mode: it finds the job that just started.
-          () => api(`${base}/publish`, { method: 'POST', body: { clips: files, platforms: plan.platforms, plan_id: plan.plan_id } })) }),
-        h('button', { class: 'btn', text: 'Cancel', onclick: () => planArea.replaceChildren() })) : null,
-      h('p', { class: 'muted small', text: 'Posts go out immediately and publicly. If anything changes before you confirm, the post is refused and you preview again.' })));
+          h('button', { class: 'btn danger', text: `Post all publicly now (${plan.posts.length})`, onclick: (e) => act(e.currentTarget, publish({})) }),
+          h('button', { class: 'btn', text: 'Cancel', onclick: () => planArea.replaceChildren() }))] : null,
+      h('p', { class: 'muted small', text: 'Clips posted together compete with each other, so spreading them is the usual choice; each goes out publicly at midday on its day. Posting now sends every one of them immediately. If anything changes before you confirm, the request is refused and you preview again.' })));
     planArea.querySelector('button')?.focus();
   };
 
@@ -635,10 +655,25 @@ function platformRow(svc, clip, platform, base, canPublish) {
         } })
         : null);
   }
+  const q = clip.scheduled && clip.scheduled[platform];
+  if (q && (q.status === 'waiting' || q.status === 'posting')) {
+    const path2 = `${base}/clips/${encodeURIComponent(clip.file)}/scheduled/${platform}`;
+    return h('div', { class: 'platform' }, name, pill(q.status === 'posting' ? 'Posting now' : 'Queued', 'info'),
+      h('span', { class: 'platform-detail', text: `Goes out ${when(q.post_at)} (queued by ${q.by_login}, ${when(q.created_at)}).` }),
+      canPublish && q.status === 'waiting'
+        ? h('button', { class: 'btn small', text: 'Take out of the queue', onclick: (e) => {
+          if (!confirm(`Take "${clip.title}" out of the ${PLATFORM_NAMES[platform]} queue? It stays approved and can be posted or queued again.`)) return;
+          act(e.currentTarget, () => api(path2, { method: 'DELETE' }), { done: 'Taken out of the queue.' });
+        } })
+        : null);
+  }
   if (clip.review_state !== 'approved') {
     return h('div', { class: 'platform' }, name, pill('Not posted'),
       h('span', { class: 'platform-detail muted', text: 'Waiting for approval.' }));
   }
+  // A queued post that was held when its day came (the clip changed, or was
+  // posted elsewhere by then) is owed again; its reason says what happened.
+  const held = q && q.status === 'held' ? `It was queued for ${when(q.post_at)} but held: ${q.outcome}. ` : '';
   const refused = clip.failed && clip.failed[platform];
   if (platform === 'instagram' && clip.instagram_needs_manual) {
     return manualRow(clip, platform, name, path, canPublish,
@@ -651,8 +686,8 @@ function platformRow(svc, clip, platform, base, canPublish) {
       `${PLATFORM_NAMES[platform]} refused the post ${when(refused.at)}: ${refused.error} `
       + `You can choose it above to try again, or upload it from the ${PLATFORM_NAMES[platform]} app with this caption and record the link here.`);
   }
-  return h('div', { class: 'platform' }, name, pill('Not posted'),
-    h('span', { class: 'platform-detail muted', text: 'Approved; choose it above to post.' }));
+  return h('div', { class: 'platform' }, name, pill('Not posted', held ? 'warn' : ''),
+    h('span', { class: 'platform-detail muted', text: `${held}Approved; choose it above to post or queue it.` }));
 }
 
 const MANUAL_URL_HINT = { youtube: 'https://youtube.com/shorts/...',
@@ -987,6 +1022,30 @@ async function pageSchedule() {
   const dateWhy = h('input', { type: 'text', id: 'skip-reason', placeholder: 'Reason (optional)' });
   const laterSkips = s.skips.filter((k) => !s.upcoming.some((u) => u.date === k.date));
 
+  // The posting queue (publish --spread), across services.
+  const queue = await api('/scheduled');
+  const queued = queue.posts.map((q) => h('tr', {},
+    h('td', { class: 'nowrap', text: when(q.post_at) }),
+    h('td', {}, h('a', { href: `#/publish/${encodeURIComponent(q.service_id)}`, text: q.title || q.file }),
+      q.service_date ? h('span', { class: 'muted small', text: ` · ${serviceDate(q.service_date)}` }) : null),
+    h('td', { text: PLATFORM_NAMES[q.platform] }),
+    h('td', { text: q.by_login }),
+    h('td', {}, q.status === 'posting' ? pill('Posting now', 'info') : can('publish')
+      ? h('button', { class: 'btn small', text: 'Take out', onclick: (e) => {
+        if (!confirm(`Take "${q.title || q.file}" out of the ${PLATFORM_NAMES[q.platform]} queue?`)) return;
+        act(e.currentTarget, () => api(`/services/${encodeURIComponent(q.service_id)}/clips/${encodeURIComponent(q.file)}/scheduled/${q.platform}`, { method: 'DELETE' }), { done: 'Taken out of the queue.' });
+      } }) : null)));
+  const posting = queue.posting;
+  const queueCard = h('section', { class: 'card', 'aria-labelledby': 'sched-queue' },
+    h('div', { class: 'card-head' }, h('h2', { id: 'sched-queue', text: 'Queued posts' }),
+      pill(`${posting.waiting} waiting`, posting.waiting ? 'info' : '')),
+    h('p', { class: 'muted', text: `Clips queued from Publish go out one a day, ${posting.days[0]} to ${posting.days[posting.days.length - 1]} at ${posting.time} church time, at the first posting check after their time${posting.next_check ? ` (next check ${when(posting.next_check)})` : ''}.` }),
+    queued.length ? h('div', { class: 'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {}, ['Goes out', 'Clip', 'Platform', 'Queued by', ''].map((t) => h('th', { scope: 'col', text: t })))),
+      h('tbody', {}, queued))) : h('p', { class: 'muted', text: 'Nothing is queued. On the Publish page, Preview then Spread over the week.' }),
+    h('p', { class: 'muted small' }, 'The checks come from ', h('span', { class: 'mono', text: posting.workflow }),
+      ` (${posting.crons.join(', ') || 'no schedule found'}).`));
+
   const recent = s.recent.map((run) => h('tr', {},
     h('td', {}, h('a', { href: `#/runs/${encodeURIComponent(run.id)}`, class: 'mono', text: run.id })),
     h('td', { class: 'nowrap', text: when(run.started_at) }),
@@ -1015,6 +1074,7 @@ async function pageSchedule() {
             if (!dateIn.value) { toast('Pick a date first.', 'bad'); return; }
             post('/schedule/skips', { date: dateIn.value, reason: dateWhy.value }, `${dateIn.value} skipped.`)(e);
           } }))) : null),
+    queueCard,
     h('section', { class: 'card', 'aria-labelledby': 'sched-recent' }, h('h2', { id: 'sched-recent', text: 'Recent scheduled runs' }),
       recent.length || missed.length ? h('div', { class: 'table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, ['Run', 'Started', 'Result', 'Outcome'].map((t) => h('th', { scope: 'col', text: t })))),

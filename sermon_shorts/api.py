@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .core import audit, posts, records, review, runs, schedule, users, version
+from .core import audit, posts, records, review, runs, schedule, scheduled, users, version
 from .core.audit import Actor
 from .core.db import PROJECT_DIR, SCHEMA_VERSION, connect, write
 from .core.posts import PLATFORMS
@@ -167,7 +167,7 @@ def _media_url(path: Path) -> str | None:
 
 
 def _clip_view(conn, sid: str, folder: Path, n: int, entry: dict, posted: dict,
-               refused: dict | None = None) -> dict:
+               refused: dict | None = None, queued: dict | None = None) -> dict:
     fp = records.manifest_fingerprint(folder, entry)
     state, d = review.status(conn, sid, entry["file"], fp)
     mp4 = folder / entry["file"]
@@ -185,13 +185,17 @@ def _clip_view(conn, sid: str, folder: Path, n: int, entry: dict, posted: dict,
         # Studio offers to post those by hand too, as Meta marks some refusals
         # non-retriable (a 63 s Reel on 2026-11-02, under the measured limit).
         "failed": (posts.failures(conn, sid) if refused is None else refused).get(entry["file"], {}),
+        # Posts waiting for their day (publish --spread), and ones held or failed
+        # when their day came: {platform: {status, post_at, by_login, outcome}}.
+        "scheduled": (scheduled.latest(conn, sid) if queued is None else queued).get(entry["file"], {}),
     }
 
 
 def _service_view(conn, service: dict, folder: Path | None) -> dict:
     sid = service["id"]
     posted, refused = posts.posts_for(conn, sid), posts.failures(conn, sid)
-    clips = ([_clip_view(conn, sid, folder, n, e, posted, refused)
+    queued = scheduled.latest(conn, sid)
+    clips = ([_clip_view(conn, sid, folder, n, e, posted, refused, queued)
               for n, e in enumerate(records.load_manifest(folder), 1)] if folder else [])
     last = conn.execute("SELECT * FROM runs WHERE service_id = ? ORDER BY started_at DESC "
                         "LIMIT 1", (sid,)).fetchone()
@@ -374,6 +378,9 @@ class PlanIn(BaseModel):
 
 class PublishIn(PlanIn):
     plan_id: str
+    # True queues the plan's clips one a day over the week (core/scheduled.py)
+    # instead of posting them now.
+    spread: bool = False
 
 
 class ManualPostIn(BaseModel):
@@ -424,7 +431,7 @@ def create_app() -> FastAPI:
             return fn()
         except review.StaleError as e:
             raise ApiError(409, "approval_stale", str(e))
-        except (review.ReviewError, AccountError) as e:
+        except (review.ReviewError, AccountError, scheduled.ScheduledError) as e:
             raise ApiError(400, "not_allowed", str(e))
 
     # -- session --
@@ -580,13 +587,22 @@ def create_app() -> FastAPI:
         jobs, skipped = posts.plan(conn, sid, folder, chosen, platforms)
         return folder, platforms, jobs, skipped, posts.plan_id(jobs, skipped)
 
+    def _spread(jobs) -> dict:
+        """Each planned clip's day if the plan is spread over the week, in the
+        order the clips were chosen."""
+        order = list(dict.fromkeys(j["n"] for j in jobs))
+        return dict(zip(order, scheduled.spread(len(order))))
+
     def _plan_view(jobs, skipped, pid, platforms) -> dict:
         def row(j):
             return {"n": j["n"], "file": j["entry"]["file"], "title": j["entry"]["title"],
                     "platform": j["platform"], "fingerprint": j["fingerprint"]}
+        days = _spread(jobs)
         return {"plan_id": pid, "platforms": platforms, "posts": [row(j) for j in jobs],
                 "skipped": [{**row(s), "kind": s["kind"], "reason": s["reason"]}
-                            for s in skipped]}
+                            for s in skipped],
+                # The same posts one clip a day, if asked for with spread: true.
+                "spread": [{**row(j), "post_at": scheduled.iso(days[j["n"]])} for j in jobs]}
 
     @app.post(f"{v1}/services/{{sid}}/publish-plans")
     def plan_publish(sid: str, body: PlanIn, user: User = Depends(need("publish")),
@@ -606,6 +622,10 @@ def create_app() -> FastAPI:
                            "(an approval, a re-render or another post). Preview again.")
         if not jobs:
             raise ApiError(409, "nothing_to_post", "Nothing in this plan can be posted.")
+        if body.spread:
+            rows = wrap(lambda: scheduled.schedule_posts(conn, user, sid, jobs, _spread(jobs),
+                                                         via="web"))
+            return JSONResponse({"scheduled": rows}, status_code=201)
         job_id = "p_" + runs.new_id()[2:]
         with _jobs_lock:
             if any(j["status"] == "running" and j["service"] == sid for j in _jobs.values()):
@@ -676,6 +696,33 @@ def create_app() -> FastAPI:
         except PermissionError as e:
             raise ApiError(409, "not_manual", str(e))
         return {"ok": True}
+
+    # -- the posting queue (publish --spread) --
+
+    @app.get(f"{v1}/scheduled")
+    def scheduled_posts(user: User = Depends(need("view")), conn=Depends(get_conn)):
+        """Every post waiting for its day, across services, soonest first."""
+        return {"posts": scheduled.upcoming(conn), "posting": scheduled.posting_overview(conn)}
+
+    def _cancel(conn, user: User, sid: str, file: str, platform: str | None, reason: str):
+        _, folder = _folder(conn, sid)
+        _clip_number(folder, file)
+        rows = wrap(lambda: scheduled.cancel(conn, user, sid, file, platform, reason, via="web"))
+        return {"cancelled": rows}
+
+    @app.delete(f"{v1}/services/{{sid}}/clips/{{file}}/scheduled")
+    def cancel_scheduled(sid: str, file: str, reason: str = "",
+                         user: User = Depends(need("publish")), conn=Depends(get_conn)):
+        """Take the clip out of the queue on every platform; it is owed again."""
+        return _cancel(conn, user, sid, file, None, reason)
+
+    @app.delete(f"{v1}/services/{{sid}}/clips/{{file}}/scheduled/{{platform}}")
+    def cancel_scheduled_platform(sid: str, file: str, platform: str, reason: str = "",
+                                  user: User = Depends(need("publish")),
+                                  conn=Depends(get_conn)):
+        if platform not in PLATFORMS:
+            raise ApiError(404, "no_platform", f"Platforms are {', '.join(PLATFORMS)}.")
+        return _cancel(conn, user, sid, file, platform, reason)
 
     @app.post(f"{v1}/services/{{sid}}/clips/{{file}}/posts/youtube/cover")
     def retry_cover(sid: str, file: str, user: User = Depends(need("publish")),
@@ -820,7 +867,8 @@ def create_app() -> FastAPI:
                   if g["event"] == "schedule"
                   and not conn.execute("SELECT 1 FROM runs WHERE github_run_id = ?",
                                        (g["github_run_id"],)).fetchone()]
-        return {**schedule.overview(conn), "recent": recent, "never_reached_sprite": missed}
+        return {**schedule.overview(conn), "recent": recent, "never_reached_sprite": missed,
+                "posting": scheduled.posting_overview(conn)}
 
     @app.post(f"{v1}/schedule/pause")
     def pause_schedule(body: PauseIn, user: User = Depends(need("run")), conn=Depends(get_conn)):

@@ -51,19 +51,24 @@ def posts_for(conn: sqlite3.Connection, service_id: str) -> dict[str, dict[str, 
 # --- the publish plan -------------------------------------------------------
 
 def plan(conn: sqlite3.Connection, service_id: str, folder: Path, chosen: list[int],
-         platforms: list[str], assume_approved: set[int] = frozenset()
-         ) -> tuple[list[dict], list[dict]]:
+         platforms: list[str], assume_approved: set[int] = frozenset(),
+         ignore_scheduled: bool = False) -> tuple[list[dict], list[dict]]:
     """Which (clip, platform) posts would go out now, and which are skipped and why.
 
     The gate: a clip is posted only if its latest decision approves its
     current fingerprint. Then, per platform: never twice (ledger or posts
-    table), and Instagram's API only up to IG_MAX_SECONDS.
+    table), not while a scheduled post of it waits for its day (the queue
+    itself plans with `ignore_scheduled`), and Instagram's API only up to
+    IG_MAX_SECONDS.
     Each job/skip: {n, entry, platform, fingerprint, reason?, kind?}.
     `assume_approved` previews a plan for clips about to be approved (publish
     --approve shows it before confirming); the real posting re-plans without it.
     """
+    from . import scheduled  # it plans through this function
+
     clips = records.load_manifest(folder)
     ledger, posted = load_ledger(folder), posts_for(conn, service_id)
+    queued = {} if ignore_scheduled else scheduled.waiting(conn, service_id)
     jobs, skipped = [], []
     for n in chosen:
         entry = clips[n - 1]
@@ -81,6 +86,11 @@ def plan(conn: sqlite3.Connection, service_id: str, folder: Path, chosen: list[i
             if done:
                 skipped.append({**base, "platform": platform, "kind": "already",
                                 "reason": done.get("url") or "posted"})
+            elif platform in queued.get(entry["file"], {}):
+                q = queued[entry["file"]][platform]
+                skipped.append({**base, "platform": platform, "kind": "scheduled",
+                                "reason": f"scheduled for {scheduled.when_local(q['post_at'])} "
+                                          f"by {q['by_login']}"})
             elif platform == "instagram" and seconds > IG_MAX_SECONDS:
                 skipped.append({**base, "platform": platform, "kind": "manual_required",
                                 "reason": f"{seconds:.0f}s, limit {IG_MAX_SECONDS}s"})
@@ -235,12 +245,15 @@ def failures(conn: sqlite3.Connection, service_id: str) -> dict[str, dict[str, d
 
 
 def needs_you(conn: sqlite3.Connection, service_id: str, folder: Path) -> list[dict]:
-    """Open items for one service: clips to review, approved clips not posted,
-    uploads owed by hand (Instagram over the limit, or a platform that refused
+    """Open items for one service: clips to review, approved clips neither
+    posted nor scheduled, uploads owed by hand (Instagram over the limit, or a platform that refused
     the post), covers that didn't take, a failed run.
     Each item: {kind, n, file, title, text}."""
+    from . import scheduled
+
     items = []
     posted, refused = posts_for(conn, service_id), failures(conn, service_id)
+    queued = scheduled.waiting(conn, service_id)
     for n, entry in enumerate(records.load_manifest(folder), 1):
         file, title = entry["file"], entry["title"]
         fp = records.manifest_fingerprint(folder, entry)
@@ -253,7 +266,7 @@ def needs_you(conn: sqlite3.Connection, service_id: str, folder: Path) -> list[d
             continue
         if state == review.REJECTED:
             continue
-        if not mine:
+        if not mine and not queued.get(file):
             items.append({**base, "kind": "publish", "text": f'Post "{title}": approved, '
                           "not posted anywhere yet"})
             continue

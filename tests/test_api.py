@@ -232,6 +232,59 @@ class ApiTest(unittest.TestCase):
         s = self.client.get(f"{base}", headers=self.as_(self.reviewer_token)).json()
         self.assertEqual(s["needs_you"], [])
 
+    def test_spread_queues_the_plan_one_clip_a_day_instead_of_posting(self):
+        self.approve("01_clip.mp4")
+        self.approve("02_clip.mp4")
+        base = f"/api/v1/services/{self.sid}"
+        body = {"clips": ["01_clip.mp4", "02_clip.mp4"], "platforms": ["youtube", "facebook"]}
+        plan = self.client.post(f"{base}/publish-plans", json=body,
+                                headers=self.as_(self.approver_token)).json()
+        days = {p["file"]: p["post_at"] for p in plan["spread"]}
+        self.assertEqual(set(days), {"01_clip.mp4", "02_clip.mp4"})
+        self.assertLess(days["01_clip.mp4"], days["02_clip.mp4"])  # different days
+        r = self.client.post(f"{base}/publish", json={**body, "plan_id": plan["plan_id"],
+                                                      "spread": True},
+                             headers=self.as_(self.approver_token))
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertEqual(len(r.json()["scheduled"]), 4)
+        self.assertEqual(self.posted, [])
+        clip = self.clip("01_clip.mp4")
+        self.assertEqual(clip["scheduled"]["youtube"]["status"], "waiting")
+        self.assertEqual(clip["scheduled"]["youtube"]["post_at"], days["01_clip.mp4"])
+        s = self.client.get(base, headers=self.as_(self.reviewer_token)).json()
+        self.assertEqual([i["kind"] for i in s["needs_you"]], ["manual"])  # Instagram, 79 s
+        q = self.client.get("/api/v1/scheduled", headers=self.as_(self.reviewer_token)).json()
+        self.assertEqual([(p["file"], p["platform"]) for p in q["posts"]][:2],
+                         [("01_clip.mp4", "youtube"), ("01_clip.mp4", "facebook")])
+        self.assertEqual(q["posts"][0]["title"], "Clip 1")
+        self.assertEqual(q["posting"]["waiting"], 4)
+        sched = self.client.get("/api/v1/schedule", headers=self.as_(self.reviewer_token)).json()
+        self.assertEqual(sched["posting"]["time"], "12:00")
+
+        # Queued posts are out of the plan until taken out of the queue.
+        plan = self.client.post(f"{base}/publish-plans", json=body,
+                                headers=self.as_(self.approver_token)).json()
+        self.assertEqual(plan["posts"], [])
+        self.assertEqual({s["kind"] for s in plan["skipped"]}, {"scheduled"})
+        r = self.client.delete(f"{base}/clips/01_clip.mp4/scheduled/youtube",
+                               headers=self.as_(self.reviewer_token))
+        self.assertEqual(r.status_code, 403)
+        r = self.client.delete(f"{base}/clips/01_clip.mp4/scheduled/youtube",
+                               headers=self.as_(self.approver_token))
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.delete(f"{base}/clips/02_clip.mp4/scheduled",
+                               headers=self.as_(self.approver_token))
+        self.assertEqual(len(r.json()["cancelled"]), 2)
+        r = self.client.delete(f"{base}/clips/02_clip.mp4/scheduled",
+                               headers=self.as_(self.approver_token))
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (400, "not_allowed"))
+        plan = self.client.post(f"{base}/publish-plans", json=body,
+                                headers=self.as_(self.approver_token)).json()
+        self.assertEqual({(p["file"], p["platform"]) for p in plan["posts"]},
+                         {("01_clip.mp4", "youtube"), ("02_clip.mp4", "youtube"),
+                          ("02_clip.mp4", "facebook")})
+        self.assertNotIn("scheduled", self.clip("02_clip.mp4")["scheduled"])
+
     def test_a_posting_job_reports_each_post_and_can_be_found_again(self):
         self.approve("02_clip.mp4")
         base = f"/api/v1/services/{self.sid}"

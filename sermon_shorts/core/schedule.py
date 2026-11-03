@@ -15,6 +15,7 @@ import json
 import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import audit
@@ -22,6 +23,8 @@ from .db import PROJECT_DIR, write
 from .users import User
 
 WORKFLOW = PROJECT_DIR / ".github" / "workflows" / "weekly.yml"
+# Posts scheduled with `publish --spread` go out when this one runs `publish --due`.
+POSTING_WORKFLOW = PROJECT_DIR / ".github" / "workflows" / "posting.yml"
 DEFAULT_TZ = "America/New_York"  # the church's; church.json "timezone" overrides
 SCHEDULE_STARTER = "schedule"    # runs.started_by for runs the workflow's cron started
 
@@ -32,9 +35,9 @@ class ScheduleError(Exception):
 
 # --- reading the workflow's cron lines --------------------------------------
 
-def crons() -> list[str]:
+def crons(workflow: Path = WORKFLOW) -> list[str]:
     try:
-        text = WORKFLOW.read_text(encoding="utf-8")
+        text = workflow.read_text(encoding="utf-8")
     except OSError:
         return []
     return re.findall(r'^\s*-\s*cron:\s*["\']([^"\']+)["\']', text, re.M)
@@ -70,10 +73,12 @@ def _matcher(cron: str):
     return day_matches, hours, mins
 
 
-def fire_times(start: datetime, days: int = 60) -> list[datetime]:
-    """Every time GitHub is asked to start a scheduled run (UTC), from `start`."""
+def fire_times(start: datetime, days: int = 60, cron_lines: list[str] | None = None
+               ) -> list[datetime]:
+    """Every time GitHub is asked to start a scheduled run (UTC), from `start`;
+    the weekly run's times unless `cron_lines` are another workflow's."""
     out = []
-    for cron in crons():
+    for cron in crons() if cron_lines is None else cron_lines:
         try:
             day_matches, hours, mins = _matcher(cron)
         except ValueError:
