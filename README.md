@@ -306,6 +306,28 @@ clips are occasionally refused with the same error; when that happens the
 Studio's Publish page offers the same hand-post helpers (download, caption,
 Mark as posted) for that platform, and the clip can also be tried again.
 
+### Posting a Reel to Instagram by hand
+
+Instagram only takes uploads from its phone app, so do this on a phone:
+
+1. Open the Studio's Publish page on the phone and, on the clip's Instagram
+   row, tap **Download video** and **Download cover**. Save both to the camera
+   roll (on iPhone: Share, then Save Video / Save Image).
+2. In Instagram, tap **+**, choose **Reel**, pick the video and tap Next. The
+   clip is already cut, so skip trimming and effects.
+3. On the final screen tap **Edit cover**, then **Add from camera roll**, and
+   pick the cover image.
+4. Tap **Copy caption** in the Studio and paste it into the caption box. Leave
+   "Also share to feed" on, which is what the API does.
+5. Tap **Share**. Open the posted reel, tap the three dots, choose **Copy
+   link**, paste it into the Studio's field and tap **Mark as posted** (or run
+   `mark-posted N instagram --url ...`). That records who posted it and keeps
+   `publish` from trying the clip again.
+
+The Studio shows these steps under "How to post it from the Instagram app" on
+every row that needs a hand post, with shorter equivalents for Facebook and
+YouTube.
+
 ## People and roles
 
 The review web app (in progress, see `docs/api-design.md`) needs to know who

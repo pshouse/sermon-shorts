@@ -8,6 +8,14 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-03
+
+### Added
+- Every "Post by hand" row in the Studio has a fold-out "How to post it from
+  the ... app" with numbered steps: Instagram in full (save the video and cover
+  to the camera roll, Reel, Edit cover, paste the caption, Share, Copy link),
+  shorter ones for Facebook and YouTube. README has the Instagram steps too.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added
@@ -116,7 +124,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...v0.3.0
