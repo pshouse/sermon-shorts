@@ -176,6 +176,40 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual([i["kind"] for i in posts.needs_you(self.conn, self.sid, self.folder)
                           if i["kind"] == "manual"], [])
 
+    def test_manual_links_must_come_from_the_platform(self):
+        ok = posts.check_manual_url
+        self.assertIsNone(ok("instagram", "https://www.instagram.com/reels/DfQx/"))
+        self.assertIsNone(ok("youtube", " https://youtu.be/abc "))
+        self.assertIsNone(ok("facebook", "https://fb.watch/xyz"))
+        self.assertIn("That's a Facebook link", ok("instagram", "https://facebook.com/reel/1/"))
+        self.assertIn("doesn't look like", ok("instagram", "https://example.com/reel/1"))
+        self.assertIn("link", ok("instagram", "reel/1"))
+        self.assertIn("doesn't look like", ok("facebook", "https://notfacebook.com/x"))
+
+    def test_a_hand_record_can_be_withdrawn_but_an_api_post_cannot(self):
+        review.decide(self.conn, self.approver, self.folder, 2, "approve")
+        actor = self.approver.actor("cli")
+        posts.record_post(self.conn, actor, self.sid, "02_clip.mp4", "youtube", "y", "u", "fp")
+        ledger = posts.load_ledger(self.folder)
+        posts.write_ledger_entry(self.folder, ledger, "02_clip.mp4", "instagram",
+                                 {"url": "https://facebook.com/reel/1/", "manual": True})
+        posts.record_post(self.conn, actor, self.sid, "02_clip.mp4", "instagram", None,
+                          "https://facebook.com/reel/1/", "fp", manual=True)
+        with self.assertRaises(PermissionError):
+            posts.withdraw_manual(self.conn, actor, self.sid, self.folder, "02_clip.mp4", "youtube")
+        row = posts.withdraw_manual(self.conn, actor, self.sid, self.folder, "02_clip.mp4",
+                                    "instagram", "wrong link")
+        self.assertEqual(row["url"], "https://facebook.com/reel/1/")
+        self.assertNotIn("instagram", posts.posts_for(self.conn, self.sid)["02_clip.mp4"])
+        self.assertNotIn("instagram", posts.load_ledger(self.folder)["02_clip.mp4"])
+        self.assertEqual(audit.events(self.conn, action="post.withdrawn")[0]["data"]["reason"],
+                         "wrong link")
+        with self.assertRaises(LookupError):
+            posts.withdraw_manual(self.conn, actor, self.sid, self.folder, "02_clip.mp4", "instagram")
+        # Owed again, and can be recorded properly now.
+        posts.record_post(self.conn, actor, self.sid, "02_clip.mp4", "instagram", None,
+                          "https://www.instagram.com/reels/x/", "fp", manual=True)
+
     # --- needs you ---
 
     def test_needs_you_walks_a_clip_through_its_life(self):

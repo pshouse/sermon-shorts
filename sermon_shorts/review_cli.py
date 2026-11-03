@@ -20,7 +20,7 @@ from .core.db import connect
 from .core.posts import PLATFORMS
 
 USER_ENV = "SERMON_SHORTS_USER"
-COMMANDS = ("approve", "reject", "note", "mark-posted", "retry-cover")
+COMMANDS = ("approve", "reject", "note", "mark-posted", "unmark-posted", "retry-cover")
 
 
 def _parser(cmd: str) -> argparse.ArgumentParser:
@@ -45,6 +45,11 @@ def _parser(cmd: str) -> argparse.ArgumentParser:
         p.add_argument("targets", nargs="+", metavar="[SERVICE] N PLATFORM")
         p.add_argument("--url", required=True, help="the post's link")
         p.add_argument("--note", default="")
+    elif cmd == "unmark-posted":
+        p.description = ("Take back a post recorded by hand (wrong link, or never posted) "
+                         "so the clip is owed again. Posts made by the API can't be taken back.")
+        p.add_argument("targets", nargs="+", metavar="[SERVICE] N PLATFORM")
+        p.add_argument("--reason", default="")
     else:
         p.description = "Try setting a YouTube cover again after it failed."
         p.add_argument("targets", nargs="+", metavar="[SERVICE] N")
@@ -111,6 +116,8 @@ def _run(cmd, args, conn, user, folder, rest) -> int:
             sys.exit(f"Usage: mark-posted [SERVICE] N {{{','.join(PLATFORMS)}}} --url URL")
         n, platform = int(rest[0]), rest[1]
         entry = review.clip_at(folder, n)
+        if (why := posts.check_manual_url(platform, args.url)):
+            sys.exit(f"Not done: {why}")
         ledger = posts.load_ledger(folder)
         if platform in ledger.get(entry["file"], {}) or platform in posts.posts_for(
                 conn, service_id).get(entry["file"], {}):
@@ -126,6 +133,20 @@ def _run(cmd, args, conn, user, folder, rest) -> int:
         posts.record_post(conn, user.actor("cli"), service_id, entry["file"], platform, None,
                           args.url, fp, manual=True, note=args.note)
         print(f"  recorded: {entry['title']} on {platform} (by hand) — {args.url}")
+        return 0
+
+    if cmd == "unmark-posted":
+        if len(rest) != 2 or not rest[0].isdigit() or rest[1] not in PLATFORMS:
+            sys.exit(f"Usage: unmark-posted [SERVICE] N {{{','.join(PLATFORMS)}}} [--reason WHY]")
+        n, platform = int(rest[0]), rest[1]
+        entry = review.clip_at(folder, n)
+        try:
+            row = posts.withdraw_manual(conn, user.actor("cli"), service_id, folder,
+                                        entry["file"], platform, args.reason)
+        except (LookupError, PermissionError) as e:
+            sys.exit(f"Not done: {e}.")
+        print(f"  removed the hand record of {entry['title']} on {platform} ({row['url']}); "
+              "it is owed again")
         return 0
 
     # retry-cover

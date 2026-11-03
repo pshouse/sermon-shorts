@@ -243,6 +243,7 @@ Reviewing and following up:
 python -m sermon_shorts note 2 "The verse on screen is wrong"        # anyone: a note, no decision
 python -m sermon_shorts reject 2 --note "Wrong verse reference"       # approvers: a reason is required
 python -m sermon_shorts mark-posted 1 instagram --url https://...     # record a post made in the app
+python -m sermon_shorts unmark-posted 1 instagram --reason "wrong link" # take a hand record back
 python -m sermon_shorts retry-cover 2                                 # YouTube cover failed: try again
 python -m sermon_shorts services show                                 # status, posts and what needs you
 ```
@@ -327,6 +328,13 @@ Instagram only takes uploads from its phone app, so do this on a phone:
 The Studio shows these steps under "How to post it from the Instagram app" on
 every row that needs a hand post, with shorter equivalents for Facebook and
 YouTube.
+
+The link has to come from the platform being recorded (an Instagram row
+refuses a facebook.com link). If a hand record is wrong anyway, **Remove this
+record** on that row (or `unmark-posted N PLATFORM`) takes it back: the post
+itself is untouched, the removal is in the audit log, and the clip is owed
+again so the right link can be recorded. Posts the API made can't be taken
+back, because they are live.
 
 ## People and roles
 

@@ -209,6 +209,23 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([i["kind"] for i in s["needs_you"]], ["manual"])
 
         r = self.client.post(f"{base}/clips/01_clip.mp4/posts/instagram/manual",
+                             json={"url": "https://www.facebook.com/reel/1/"},
+                             headers=self.as_(self.approver_token))
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (400, "bad_url"))
+        self.assertIn("Facebook link", r.json()["error"]["message"])
+        r = self.client.post(f"{base}/clips/01_clip.mp4/posts/instagram/manual",
+                             json={"url": "https://instagram.com/reel/x"},
+                             headers=self.as_(self.approver_token))
+        self.assertEqual(r.status_code, 201)
+        r = self.client.delete(f"{base}/clips/01_clip.mp4/posts/youtube/manual",
+                               headers=self.as_(self.approver_token))
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "not_manual"))
+        r = self.client.delete(f"{base}/clips/01_clip.mp4/posts/instagram/manual",
+                               headers=self.as_(self.approver_token))
+        self.assertEqual(r.status_code, 200, r.text)
+        s = self.client.get(f"{base}", headers=self.as_(self.reviewer_token)).json()
+        self.assertNotIn("instagram", s["clips"][0]["posts"])
+        r = self.client.post(f"{base}/clips/01_clip.mp4/posts/instagram/manual",
                              json={"url": "https://instagram.com/reel/x"},
                              headers=self.as_(self.approver_token))
         self.assertEqual(r.status_code, 201)

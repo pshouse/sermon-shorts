@@ -644,8 +644,8 @@ def create_app() -> FastAPI:
                     user: User = Depends(need("publish")), conn=Depends(get_conn)):
         if platform not in PLATFORMS:
             raise ApiError(404, "no_platform", f"Platforms are {', '.join(PLATFORMS)}.")
-        if not body.url.startswith(("https://", "http://")):
-            raise ApiError(400, "bad_url", "Give the post's link.")
+        if (why := posts.check_manual_url(platform, body.url)):
+            raise ApiError(400, "bad_url", why)
         _, folder = _folder(conn, sid)
         n = _clip_number(folder, file)
         entry = records.load_manifest(folder)[n - 1]
@@ -657,8 +657,24 @@ def create_app() -> FastAPI:
         posts.write_ledger_entry(folder, ledger, file, platform, {
             "id": None, "url": body.url, "manual": True, "by": user.login,
             "at": datetime.now().isoformat(timespec="seconds")})
-        posts.record_post(conn, _actor(user), sid, file, platform, None, body.url, fp,
+        posts.record_post(conn, _actor(user), sid, file, platform, None, body.url.strip(), fp,
                           manual=True, note=body.note)
+        return {"ok": True}
+
+    @app.delete(f"{v1}/services/{{sid}}/clips/{{file}}/posts/{{platform}}/manual")
+    def unmark_posted(sid: str, file: str, platform: str, reason: str = "",
+                      user: User = Depends(need("publish")), conn=Depends(get_conn)):
+        """Take back a hand record (wrong link, or never actually posted) so the
+        clip is owed again. A post the API made can't be taken back: it is live."""
+        if platform not in PLATFORMS:
+            raise ApiError(404, "no_platform", f"Platforms are {', '.join(PLATFORMS)}.")
+        _, folder = _folder(conn, sid)
+        try:
+            posts.withdraw_manual(conn, _actor(user), sid, folder, file, platform, reason)
+        except LookupError as e:
+            raise ApiError(404, "not_posted", str(e))
+        except PermissionError as e:
+            raise ApiError(409, "not_manual", str(e))
         return {"ok": True}
 
     @app.post(f"{v1}/services/{{sid}}/clips/{{file}}/posts/youtube/cover")
