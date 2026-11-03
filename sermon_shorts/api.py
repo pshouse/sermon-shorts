@@ -166,7 +166,8 @@ def _media_url(path: Path) -> str | None:
     return f"{prefix}/{quote(rel.as_posix())}"
 
 
-def _clip_view(conn, sid: str, folder: Path, n: int, entry: dict, posted: dict) -> dict:
+def _clip_view(conn, sid: str, folder: Path, n: int, entry: dict, posted: dict,
+               refused: dict | None = None) -> dict:
     fp = records.manifest_fingerprint(folder, entry)
     state, d = review.status(conn, sid, entry["file"], fp)
     mp4 = folder / entry["file"]
@@ -180,13 +181,17 @@ def _clip_view(conn, sid: str, folder: Path, n: int, entry: dict, posted: dict) 
         "notes": [h for h in review.history(conn, sid, entry["file"]) if h["kind"] == "note"],
         "video_url": _media_url(mp4), "cover_url": _media_url(mp4.with_suffix(".jpg")),
         "instagram_needs_manual": (entry["end"] - entry["start"]) > posts.IG_MAX_SECONDS,
+        # Platforms that refused the last attempt and were not posted since: the
+        # Studio offers to post those by hand too, as Meta marks some refusals
+        # non-retriable (a 63 s Reel on 2026-11-02, under the measured limit).
+        "failed": (posts.failures(conn, sid) if refused is None else refused).get(entry["file"], {}),
     }
 
 
 def _service_view(conn, service: dict, folder: Path | None) -> dict:
     sid = service["id"]
-    posted = posts.posts_for(conn, sid)
-    clips = ([_clip_view(conn, sid, folder, n, e, posted)
+    posted, refused = posts.posts_for(conn, sid), posts.failures(conn, sid)
+    clips = ([_clip_view(conn, sid, folder, n, e, posted, refused)
               for n, e in enumerate(records.load_manifest(folder), 1)] if folder else [])
     last = conn.execute("SELECT * FROM runs WHERE service_id = ? ORDER BY started_at DESC "
                         "LIMIT 1", (sid,)).fetchone()

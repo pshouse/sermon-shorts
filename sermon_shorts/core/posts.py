@@ -158,12 +158,28 @@ def import_ledger(conn: sqlite3.Connection, actor: Actor, service_id: str, folde
 
 # --- what's waiting on a person ---------------------------------------------
 
+def failures(conn: sqlite3.Connection, service_id: str) -> dict[str, dict[str, dict]]:
+    """The latest refused post per clip and platform, from the audit log:
+    {file: {platform: {at, by_login, error}}}. A platform that was posted
+    later (by a retry or by hand) is left out, so what remains is still owed."""
+    posted = posts_for(conn, service_id)
+    out: dict[str, dict[str, dict]] = {}
+    for e in audit.events(conn, service=service_id, action="post.failed"):
+        file, platform = e["clip"], e["data"].get("platform")
+        if not file or not platform or platform in posted.get(file, {}):
+            continue
+        out.setdefault(file, {}).setdefault(platform, {   # newest first, so keep the first
+            "at": e["at"], "by_login": e["actor"], "error": e["data"].get("error", "")})
+    return out
+
+
 def needs_you(conn: sqlite3.Connection, service_id: str, folder: Path) -> list[dict]:
     """Open items for one service: clips to review, approved clips not posted,
-    Instagram uploads owed by hand, covers that didn't take, a failed run.
+    uploads owed by hand (Instagram over the limit, or a platform that refused
+    the post), covers that didn't take, a failed run.
     Each item: {kind, n, file, title, text}."""
     items = []
-    posted = posts_for(conn, service_id)
+    posted, refused = posts_for(conn, service_id), failures(conn, service_id)
     for n, entry in enumerate(records.load_manifest(folder), 1):
         file, title = entry["file"], entry["title"]
         fp = records.manifest_fingerprint(folder, entry)
@@ -181,10 +197,16 @@ def needs_you(conn: sqlite3.Connection, service_id: str, folder: Path) -> list[d
                           "not posted anywhere yet"})
             continue
         seconds = entry["end"] - entry["start"]
-        if "instagram" not in mine and seconds > IG_MAX_SECONDS:
+        too_long = "instagram" not in mine and seconds > IG_MAX_SECONDS
+        if too_long:
             items.append({**base, "kind": "manual", "text": f'Post "{title}" to Instagram '
                           f"by hand ({seconds:.0f}s is over the API's {IG_MAX_SECONDS}s), "
                           "then record it with mark-posted"})
+        for platform, f in refused.get(file, {}).items():
+            if platform not in mine and not (platform == "instagram" and too_long):
+                items.append({**base, "kind": "manual", "text": f'Post "{title}" to {platform} '
+                              f"by hand (the API refused it: {f['error']}), then record it "
+                              "with mark-posted"})
         for platform, p in mine.items():
             if p["cover"] == "failed":
                 items.append({**base, "kind": "cover", "text": f'Set the {platform} cover for '

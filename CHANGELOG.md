@@ -8,6 +8,17 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
+### Added
+- When a platform refuses a post (Meta returned a non-retriable
+  `ProcessingFailedError` for a 63 s Reel, under the measured 65 s limit), the
+  Studio's Publish page now offers the same hand-post helpers it shows for long
+  clips: Download video, Download cover, Copy caption and Mark as posted, with
+  the refusal's time and message. The clip can still be chosen above to try
+  again. "Needs you" lists the owed post, and the service view carries each
+  clip's latest refusal per platform in a new `failed` field.
+
 ## [0.3.1] - 2026-10-26
 
 ### Fixed
@@ -105,7 +116,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pshouse/sermon-shorts/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/pshouse/sermon-shorts/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/pshouse/sermon-shorts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pshouse/sermon-shorts/compare/v0.1.0...v0.2.0

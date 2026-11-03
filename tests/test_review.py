@@ -157,6 +157,25 @@ class ReviewTest(unittest.TestCase):
         kinds = [i["kind"] for i in posts.needs_you(self.conn, self.sid, self.folder)]
         self.assertNotIn("cover", kinds)
 
+    def test_a_refused_post_is_owed_by_hand_until_recorded(self):
+        review.decide(self.conn, self.approver, self.folder, 2, "approve")
+        actor = self.approver.actor("cli")
+        posts.record_post(self.conn, actor, self.sid, "02_clip.mp4", "youtube", "y", "u", "fp")
+        posts.record_failure(self.conn, actor, self.sid, "02_clip.mp4", "instagram", "old")
+        posts.record_failure(self.conn, actor, self.sid, "02_clip.mp4", "instagram",
+                             "ProcessingFailedError")
+        refused = posts.failures(self.conn, self.sid)
+        self.assertEqual(list(refused["02_clip.mp4"]), ["instagram"])
+        self.assertEqual(refused["02_clip.mp4"]["instagram"]["error"], "ProcessingFailedError")
+        items = [i for i in posts.needs_you(self.conn, self.sid, self.folder) if i["kind"] == "manual"]
+        self.assertEqual([i["n"] for i in items], [2])
+        self.assertIn("refused it: ProcessingFailedError", items[0]["text"])
+        posts.record_post(self.conn, actor, self.sid, "02_clip.mp4", "instagram", None,
+                          "https://instagram.com/reel/x", "fp", manual=True)
+        self.assertEqual(posts.failures(self.conn, self.sid), {})
+        self.assertEqual([i["kind"] for i in posts.needs_you(self.conn, self.sid, self.folder)
+                          if i["kind"] == "manual"], [])
+
     # --- needs you ---
 
     def test_needs_you_walks_a_clip_through_its_life(self):
