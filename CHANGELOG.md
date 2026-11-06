@@ -8,6 +8,13 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-06
+
+### Fixed
+- The `posting` and `weekly` GitHub Actions workflows retry installing the
+  `sprite` CLI when `sprites.dev` resets the connection mid-download, and fail
+  the install step if the binary is still missing after retries.
+
 ## [0.6.0] - 2026-11-03
 
 ### Added
@@ -167,7 +174,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/pshouse/sermon-shorts/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pshouse/sermon-shorts/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/pshouse/sermon-shorts/compare/v0.4.0...v0.4.1
