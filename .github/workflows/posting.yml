@@ -27,7 +27,13 @@ jobs:
     steps:
       - name: Install the sprite CLI
         run: |
-          curl -fsSL https://sprites.dev/install.sh | sh -s -- --bin-dir "$HOME/.local/bin"
+          for i in $(seq 1 5); do
+            curl -fsSL --retry 5 --retry-all-errors https://sprites.dev/install.sh \
+              | sh -s -- --bin-dir "$HOME/.local/bin" \
+              && [ -x "$HOME/.local/bin/sprite" ] && break
+            echo "sprite install failed (attempt $i), retrying in 5s"; sleep 5
+          done
+          [ -x "$HOME/.local/bin/sprite" ]
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate
