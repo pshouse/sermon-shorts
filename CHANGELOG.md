@@ -8,6 +8,13 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-16
+
+### Fixed
+- `--latest` and `--weekly` fetch the Subsplash recording from the public
+  session and init endpoints. The embed page no longer includes the guest
+  token, which is what failed weekly #10 on 2026-11-15.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed
@@ -174,7 +181,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/pshouse/sermon-shorts/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pshouse/sermon-shorts/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pshouse/sermon-shorts/compare/v0.4.1...v0.5.0

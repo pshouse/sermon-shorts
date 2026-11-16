@@ -1,26 +1,30 @@
 """Fetch the latest service recording from a church's public Subsplash media feed.
 
-No Subsplash login or API key needed: the public media embed page
-(subsplash.com/u/<name>/media/embed) hands every visitor a guest token, and
-that token is enough to list published media items and resolve the original
-uploaded MP4 on the Subsplash CDN — the same file the dashboard's Download
-button serves.
+No Subsplash login or API key needed. The public session endpoint
+(subsplash.com/u/<name>/api/session) sets a guest token cookie, and
+/api/init names the church's app key. That token lists published media
+items and resolves the original uploaded MP4 on the Subsplash CDN — the
+same file the dashboard's Download button serves.
 """
 
 from __future__ import annotations
 
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
-EMBED_URL = "https://subsplash.com/u/{path}/media/embed/d/*recent"
+# The embed page used to inline the guest JWT. As of the 2026-11-15 weekly
+# run it is a script shell with neither the token nor the app key, and the
+# web app reads these two instead.
+SESSION_URL = "https://subsplash.com/u/{path}/api/session"
+INIT_URL = "https://subsplash.com/u/{path}/api/init"
 MEDIA_ITEMS_URL = "https://core.subsplash.com/media/v1/media-items"
 VIDEO_FILE_URL = "https://core.subsplash.com/files/v1/videos/{id}"
 
 _TIMEOUT = 60
+_GUEST_COOKIE = "ss-token-guest"
 
 
 @dataclass
@@ -37,29 +41,78 @@ class SubsplashError(RuntimeError):
     pass
 
 
-def _guest_session(subsplash_path: str) -> tuple[httpx.Client, str]:
-    """Load the public embed page and return a client + the app key it names.
+def _guest_token(cookies, subsplash_path: str) -> str | None:
+    """The guest JWT for this church.
 
-    The embed page inlines a guest JWT (valid for a few hours) and the
-    church's app key; both are needed for the media API.
+    The session sets the same cookie twice: once on /u/<path> and once on
+    /u/-<app key>. Either is a bearer token for the media API. Prefer the
+    one scoped to this church's path.
+    """
+    wanted = f"/u/{subsplash_path}"
+    preferred = fallback = None
+    for cookie in cookies:
+        if getattr(cookie, "name", None) != _GUEST_COOKIE or not cookie.value:
+            continue
+        if (cookie.path or "").rstrip("/") == wanted:
+            preferred = cookie.value
+        elif fallback is None:
+            fallback = cookie.value
+    return preferred or fallback
+
+
+def _app_key(payload) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    app = payload.get("appData")
+    if not isinstance(app, dict):
+        return None
+    key = app.get("id")
+    return key if isinstance(key, str) and key else None
+
+
+def _guest_session(subsplash_path: str) -> tuple[httpx.Client, str]:
+    """Open a guest session and return a client plus the church's app key.
+
+    /api/session sets ss-token-guest, a JWT good for about a day, and
+    /api/init names the app key as appData.id. The media API still takes
+    that JWT as a bearer token. weekly #10 (2026-11-15) failed because the
+    embed page no longer contains either value.
     """
     client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
-    page = client.get(EMBED_URL.format(path=subsplash_path))
-    if page.status_code != 200:
-        raise SubsplashError(
-            f"Subsplash embed page for '{subsplash_path}' returned "
-            f"HTTP {page.status_code} — check the 'subsplash' name in church.json"
-        )
-    token = re.search(r'\\"guest\\":\\"(eyJ[\w.-]+)\\"', page.text)
-    app_key = re.search(r'\\"app_key\\":\\"([A-Z0-9]+)\\"', page.text)
-    if not token or not app_key:
-        raise SubsplashError(
-            "Could not find a guest token on the Subsplash embed page — "
-            "the page layout may have changed."
-        )
-    client.headers["Authorization"] = f"Bearer {token.group(1)}"
-    client.headers["Accept"] = "application/json"
-    return client, app_key.group(1)
+    try:
+        session = client.get(SESSION_URL.format(path=subsplash_path))
+        if session.status_code != 200:
+            raise SubsplashError(
+                f"Subsplash session for '{subsplash_path}' returned "
+                f"HTTP {session.status_code} — check the 'subsplash' name in church.json"
+            )
+        token = _guest_token(client.cookies.jar, subsplash_path)
+        if not token:
+            raise SubsplashError(
+                "Could not find a guest token on the Subsplash session — "
+                "the session response may have changed."
+            )
+        init = client.get(INIT_URL.format(path=subsplash_path), headers={
+            "X-Build-Env": "prod", "Accept": "application/json",
+        })
+        if init.status_code != 200:
+            raise SubsplashError(
+                f"Subsplash init for '{subsplash_path}' returned HTTP {init.status_code}"
+            )
+        try:
+            app_key = _app_key(init.json())
+        except ValueError:
+            app_key = None
+        if not app_key:
+            raise SubsplashError(
+                f"Subsplash init for '{subsplash_path}' did not name an app key."
+            )
+        client.headers["Authorization"] = f"Bearer {token}"
+        client.headers["Accept"] = "application/json"
+        return client, app_key
+    except Exception:
+        client.close()
+        raise
 
 
 def latest_recording(subsplash_path: str) -> ServiceRecording:
