@@ -181,7 +181,31 @@ def _graph(method: str, path: str, token: str, **kwargs) -> dict:
     return data
 
 
-def _upload_bytes(upload_url: str, token: str, path: Path) -> None:
+def _rupload_kept_the_file(response) -> bool:
+    """True when rupload's HTTP 400 does not mean the file was rejected.
+
+    Since mid-November 2026 that host answers
+    ProcessingFailedError / "Request processing failed" for Reels of about
+    45 seconds and longer after it has already stored the bytes. The
+    container still reaches FINISHED, and sending the file again to the
+    same container breaks transcoding. The noon posts on Nov 13, Nov 16 and
+    Nov 18 (a 59s clip, 34s into the upload) all died on this body, while
+    YouTube and Facebook of the same files succeeded. Any other 400,
+    including a ProcessingFailedError whose message is not this one, is a
+    real rejection.
+    """
+    if getattr(response, "status_code", None) != 400:
+        return False
+    try:
+        info = response.json().get("debug_info") or {}
+    except ValueError:
+        return False
+    return (info.get("type") == "ProcessingFailedError"
+            and info.get("message") == "Request processing failed")
+
+
+def _upload_bytes(upload_url: str, token: str, path: Path, *,
+                  keep_processing_failed: bool = False) -> None:
     """Send a local file to Meta's rupload host (used by both Reels APIs)."""
     data = path.read_bytes()
     try:
@@ -191,7 +215,7 @@ def _upload_bytes(upload_url: str, token: str, path: Path) -> None:
                                 "Content-Type": "application/octet-stream"})
     except httpx.HTTPError as e:
         raise PublishError(f"video upload to Meta failed: {e}") from e
-    if r.is_error:
+    if r.is_error and not (keep_processing_failed and _rupload_kept_the_file(r)):
         raise PublishError(f"video upload to Meta failed: {r.text}")
 
 
@@ -232,8 +256,10 @@ def publish_instagram(clip: dict, mp4: Path, jpg: Path | None,
         "caption": _caption(clip), "share_to_feed": "true",
     })
     progress("uploading")
+    # keep_processing_failed: a 400 from rupload is not the end of this upload.
     _upload_bytes(container.get("uri") or f"https://rupload.facebook.com/ig-api-upload/"
-                  f"{GRAPH.rsplit('/', 1)[1]}/{container['id']}", token, mp4)
+                  f"{GRAPH.rsplit('/', 1)[1]}/{container['id']}", token, mp4,
+                  keep_processing_failed=True)
 
     began = time.monotonic()
     deadline = began + PROCESSING_TIMEOUT

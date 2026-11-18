@@ -338,12 +338,14 @@ Instagram's API only accepts a cover image from a public URL, so Reels get
 the first frame as their cover — change it in the Instagram app if you like.
 Facebook Reels get the designed cover.
 
-Instagram's API also rejects Reels longer than about 65 seconds (an opaque
-`ProcessingFailedError`, regardless of file size). `publish` skips Instagram
-for longer clips and says so — post those from the Instagram app. Shorter
-clips are occasionally refused with the same error; when that happens the
-Studio's Publish page offers the same hand-post helpers (download, caption,
-Mark as posted) for that platform, and the clip can also be tried again.
+Instagram's API also rejects Reels longer than about 65 seconds (measured
+2026-10-07: 65s accepted, 70s rejected, regardless of file size). `publish`
+skips Instagram for longer clips and says so — post those from the Instagram
+app. For a shorter Reel, Meta's upload host often answers HTTP 400
+`ProcessingFailedError` after it has already taken the file (the noon posts
+on Nov 13, 16 and 18). `publish` waits for that container to finish instead
+of stopping there. A container that really ends in an error still shows the
+hand-post helpers on the Publish page, and the clip can be tried again.
 
 ### Posting a Reel to Instagram by hand
 

@@ -8,6 +8,17 @@ MINOR for new features, PATCH for fixes. The version lives in
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-18
+
+### Fixed
+- An Instagram Reel is no longer abandoned when Meta's upload host returns
+  HTTP 400 `ProcessingFailedError` ("Request processing failed"). That
+  response has meant the file was already accepted: the noon posts on
+  Nov 13, Nov 16 and Nov 18 all failed there, while YouTube and Facebook
+  of the same clips went out. `publish` waits for the container to finish
+  and then publishes it. Sending the file a second time to that container
+  is what breaks transcoding, so it does not retry the upload.
+
 ## [0.6.2] - 2026-11-16
 
 ### Fixed
@@ -181,7 +192,8 @@ versions were tracked.
   captioned clips out, with the moments chosen by Claude; `--sermon-only`
   trimming, a church profile, and `--speaker`.
 
-[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/pshouse/sermon-shorts/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/pshouse/sermon-shorts/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/pshouse/sermon-shorts/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/pshouse/sermon-shorts/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pshouse/sermon-shorts/compare/v0.5.0...v0.6.0
